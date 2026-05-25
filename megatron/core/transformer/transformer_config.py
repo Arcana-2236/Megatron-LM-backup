@@ -158,6 +158,12 @@ class TransformerConfig(ModelParallelConfig):
     """Transformer Feed-Forward Network hidden size. This is set to 4*hidden_size
     if not provided."""
 
+    mlp_rank: Optional[int] = None
+    """Bottleneck rank for CoLA low-rank MLP projections. Defaults to hidden_size // 4."""
+
+    attn_rank: Optional[int] = None
+    """Bottleneck rank for CoLA low-rank attention projections. Defaults to hidden_size // 4."""
+
     kv_channels: Optional[int] = None
     """Projection weights dimension in multi-head attention. This is set to hidden_size //
     num_attention_heads if not provided."""

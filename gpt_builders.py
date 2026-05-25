@@ -3,11 +3,12 @@
 from megatron.core.models.gpt import GPTModel
 from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
-    get_gpt_layer_local_spec,
-    get_gpt_layer_with_transformer_engine_spec,
-    get_gpt_layer_with_inference_spec,
-    get_gpt_mtp_block_spec,
     get_gpt_decoder_layer_specs,
+    get_gpt_layer_cola_spec,
+    get_gpt_layer_local_spec,
+    get_gpt_layer_with_inference_spec,
+    get_gpt_layer_with_transformer_engine_spec,
+    get_gpt_mtp_block_spec,
 )
 from megatron.core.models.gpt.experimental_attention_variant_module_specs import (
     get_transformer_block_with_experimental_attention_variant_spec,
@@ -110,6 +111,11 @@ def _get_transformer_layer_spec(use_te, config):
     Returns:
         transformer_layer_spec: The transformer layer specification
     """
+    args = get_args()
+    if getattr(args, "model_impl", "baseline") == "cola":
+        if use_te:
+            raise ValueError("CoLA model implementation requires --transformer-impl local.")
+        return get_gpt_layer_cola_spec(normalization=config.normalization)
     if use_te:
         return get_gpt_layer_with_transformer_engine_spec(
             config.num_moe_experts,

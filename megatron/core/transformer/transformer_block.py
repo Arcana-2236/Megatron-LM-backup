@@ -24,7 +24,7 @@ from megatron.core.recompute import checkpointed_forward
 from megatron.core.transformer.enums import InferenceCudaGraphScope, LayerType
 from megatron.core.transformer.module import GraphableMegatronModule, MegatronModule
 from megatron.core.transformer.spec_utils import ModuleSpec, build_module
-from megatron.core.transformer.torch_norm import LayerNormBuilder
+from megatron.core.transformer.torch_norm import LayerNormBuilder, WrappedTorchNorm
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.transformer_layer import (
     BaseTransformerLayer,
@@ -248,8 +248,13 @@ def _get_block_submodules(
             return spec.submodules
         elif issubclass(spec.module, BaseTransformerLayer):
             num_layers = get_num_layers_to_build(config, vp_stage, pp_rank)
+            layer_norm_impl = (
+                WrappedTorchNorm
+                if config.transformer_impl == "local" and config.normalization == "RMSNorm"
+                else LayerNormImpl
+            )
             return TransformerBlockSubmodules(
-                layer_specs=[spec] * num_layers, layer_norm=LayerNormImpl
+                layer_specs=[spec] * num_layers, layer_norm=layer_norm_impl
             )
         else:
             raise Exception(f"specialize for {spec.module.__name__}.")

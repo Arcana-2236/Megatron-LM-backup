@@ -283,11 +283,26 @@ def report_memory(name):
     """Simple GPU memory report."""
     args = get_args()
     mega_bytes = 1024.0 * 1024.0
+    max_allocated = torch.cuda.max_memory_allocated()
+    max_reserved = torch.cuda.max_memory_reserved()
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        max_allocated_tensor = torch.tensor(
+            [max_allocated], dtype=torch.float64, device=torch.cuda.current_device()
+        )
+        max_reserved_tensor = torch.tensor(
+            [max_reserved], dtype=torch.float64, device=torch.cuda.current_device()
+        )
+        torch.distributed.all_reduce(max_allocated_tensor, op=torch.distributed.ReduceOp.MAX)
+        torch.distributed.all_reduce(max_reserved_tensor, op=torch.distributed.ReduceOp.MAX)
+        max_allocated = max_allocated_tensor.item()
+        max_reserved = max_reserved_tensor.item()
     string = name + ' memory (MB)'
     string += f" | allocated: {torch.cuda.memory_allocated() / mega_bytes:.2f}"
     string += f" | max allocated: {torch.cuda.max_memory_allocated() / mega_bytes:.2f}"
     string += f" | reserved: {torch.cuda.memory_reserved() / mega_bytes:.2f}"
     string += f" | max reserved: {torch.cuda.max_memory_reserved() / mega_bytes:.2f}"
+    string += f" | global max allocated: {max_allocated / mega_bytes:.2f}"
+    string += f" | global max reserved: {max_reserved / mega_bytes:.2f}"
     if args.log_device_memory_used:
         string += f" | total device memory used: {torch.cuda.device_memory_used() / mega_bytes:.2f}"
     if mpu.get_data_parallel_rank() == 0:

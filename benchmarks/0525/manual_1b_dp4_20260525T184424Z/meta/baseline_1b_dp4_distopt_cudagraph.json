@@ -1,0 +1,22 @@
+{
+  "run_id": "baseline_1b_dp4_distopt_cudagraph",
+  "model_size": "1b",
+  "model_impl": "baseline",
+  "strategy": "distopt",
+  "fsdp_impl": "megatron",
+  "offload": "0",
+  "cuda_graph": "1",
+  "train_iters": "20",
+  "warmup_iters": "5",
+  "run_timeout_seconds": "600",
+  "gpus_per_node": "4",
+  "nnodes": "1",
+  "hidden_size": "2048",
+  "ffn_hidden_size": "5504",
+  "num_layers": "24",
+  "num_heads": "32",
+  "seq_length": "1024",
+  "mlp_rank": "512",
+  "attn_rank": "512",
+  "log_file": "/home/zhengyangwang/offloading/ATC-Megatron/benchmarks/0525/manual_1b_dp4_20260525T184424Z/logs/baseline_1b_dp4_distopt_cudagraph.log"
+}

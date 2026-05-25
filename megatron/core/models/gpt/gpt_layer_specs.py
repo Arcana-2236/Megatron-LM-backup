@@ -12,6 +12,7 @@ from megatron.core.models.backends import (
 )
 from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
+from megatron.core.transformer.cola import CoLAMLP, CoLASelfAttention
 from megatron.core.transformer.enums import AttnMaskType, LayerType
 from megatron.core.transformer.identity_op import IdentityOp
 from megatron.core.transformer.mlp import MLP, MLPSubmodules
@@ -28,7 +29,7 @@ from megatron.core.transformer.multi_token_prediction import (
 )
 from megatron.core.transformer.pipeline_parallel_layer_layout import PipelineParallelLayerLayout
 from megatron.core.transformer.spec_utils import ModuleSpec
-from megatron.core.transformer.torch_norm import L2Norm
+from megatron.core.transformer.torch_norm import L2Norm, WrappedTorchNorm
 from megatron.core.transformer.transformer_block import (
     TransformerBlockSubmodules,
     get_num_layers_to_build,
@@ -68,8 +69,6 @@ try:
     LNImpl = FusedLayerNorm
 except ImportError:
     import warnings
-
-    from megatron.core.transformer.torch_norm import WrappedTorchNorm
 
     warnings.warn("Apex is not installed. Falling back to Torch Norm")
     LNImpl = WrappedTorchNorm
@@ -463,6 +462,43 @@ def get_gpt_layer_local_submodules(
         )
 
 
+def get_gpt_layer_cola_submodules(
+    normalization: Optional[str] = None,
+) -> TransformerLayerSubmodules:
+    """Use CoLA low-rank attention and MLP submodules for GPT benchmarking."""
+    backend = LocalSpecProvider()
+    if normalization == "RMSNorm":
+        layer_norm = backend.layer_norm(rms_norm=True, for_qk=False, has_residual=True)
+    else:
+        layer_norm = backend.layer_norm(rms_norm=False, for_qk=False, has_residual=True)
+
+    return TransformerLayerSubmodules(
+        input_layernorm=layer_norm,
+        self_attention=ModuleSpec(
+            module=CoLASelfAttention,
+            params={"attn_mask_type": AttnMaskType.causal},
+            submodules=SelfAttentionSubmodules(
+                linear_qkv=backend.column_parallel_linear(),
+                core_attention=backend.core_attention(),
+                linear_proj=backend.row_parallel_linear(),
+                q_layernorm=IdentityOp,
+                k_layernorm=IdentityOp,
+            ),
+        ),
+        self_attn_bda=get_bias_dropout_add,
+        pre_mlp_layernorm=layer_norm,
+        mlp=CoLAMLP.as_mlp_submodule,
+        mlp_bda=get_bias_dropout_add,
+    )
+
+
+def get_gpt_layer_cola_spec(*args, **kwargs) -> ModuleSpec:
+    """Use this spec for CoLA GPT benchmark runs."""
+    return ModuleSpec(
+        module=TransformerLayer, submodules=get_gpt_layer_cola_submodules(*args, **kwargs)
+    )
+
+
 @copy_signature(get_gpt_layer_local_submodules)
 def get_gpt_layer_local_spec(*args, **kwargs) -> ModuleSpec:
     """Use this spec for an implementation using only modules in Megatron-Core."""
@@ -611,7 +647,7 @@ def get_gpt_decoder_layer_specs(
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
         )
     else:
-        layer_norm_impl = LNImpl
+        layer_norm_impl = WrappedTorchNorm if normalization == "RMSNorm" else LNImpl
         dense_layer_spec = get_gpt_layer_local_spec(
             num_experts=None,
             moe_grouped_gemm=False,

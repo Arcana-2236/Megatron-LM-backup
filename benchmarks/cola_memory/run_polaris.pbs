@@ -1,0 +1,86 @@
+#!/bin/bash -l
+#PBS -N cola_mem
+#PBS -A TensorCompress
+#PBS -q debug
+#PBS -l select=1:ncpus=64:ngpus=4
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -j oe
+
+set -euo pipefail
+
+module use /soft/modulefiles
+module load conda cudatoolkit-standalone/12.4.1
+set +u
+conda activate dspeed_env
+set -u
+
+ROOT_DIR=${ROOT_DIR:-/home/$USER/offloading/ATC-Megatron}
+cd "$ROOT_DIR"
+
+export TMPDIR=${TMPDIR:-/var/tmp/pbs.${PBS_JOBID}}
+EAGLE_PROJECT_DIR=${EAGLE_PROJECT_DIR:-/eagle/TensorCompress/$USER}
+if [ -d "$EAGLE_PROJECT_DIR" ] && [ -w "$EAGLE_PROJECT_DIR" ]; then
+  DEFAULT_RESULTS_ROOT="$EAGLE_PROJECT_DIR/atc_megatron_cola/${PBS_JOBID}"
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-$EAGLE_PROJECT_DIR/cache/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$EAGLE_PROJECT_DIR/cache/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$EAGLE_PROJECT_DIR/cache/torch_extensions}
+elif [ -d "/eagle/$USER" ] && [ -w "/eagle/$USER" ]; then
+  DEFAULT_RESULTS_ROOT="/eagle/$USER/atc_megatron_cola/${PBS_JOBID}"
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-/eagle/$USER/cache/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-/eagle/$USER/cache/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-/eagle/$USER/cache/torch_extensions}
+else
+  DEFAULT_RESULTS_ROOT="$ROOT_DIR/benchmarks/cola_memory/results/${PBS_JOBID}"
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-$TMPDIR/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$TMPDIR/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$TMPDIR/torch_extensions}
+fi
+export RESULTS_ROOT=${RESULTS_ROOT:-$DEFAULT_RESULTS_ROOT}
+mkdir -p "$TMPDIR" "$PIP_CACHE_DIR" "$UV_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$RESULTS_ROOT"
+
+export NNODES=$(awk '!seen[$0]++' "$PBS_NODEFILE" | wc -l)
+export GPUS_PER_NODE=4
+export MASTER_ADDR=$(head -n 1 "$PBS_NODEFILE")
+export MASTER_PORT=${MASTER_PORT:-$((10000 + RANDOM % 50000))}
+export PYTHON=${PYTHON:-$(which python)}
+
+echo "PBS_JOBID=$PBS_JOBID"
+echo "ROOT_DIR=$ROOT_DIR"
+echo "RESULTS_ROOT=$RESULTS_ROOT"
+echo "NNODES=$NNODES GPUS_PER_NODE=$GPUS_PER_NODE MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT"
+cat "$PBS_NODEFILE"
+
+MATRIX_ARGS=()
+if [ -n "${MODEL_SIZES:-}" ]; then
+  for model_size in $MODEL_SIZES; do
+    MATRIX_ARGS+=(--model-size "$model_size")
+  done
+fi
+if [ -n "${MODEL_IMPLS:-}" ]; then
+  for model_impl in $MODEL_IMPLS; do
+    MATRIX_ARGS+=(--model-impl "$model_impl")
+  done
+fi
+if [ -n "${STRATEGIES:-}" ]; then
+  for strategy in $STRATEGIES; do
+    MATRIX_ARGS+=(--strategy "$strategy")
+  done
+fi
+if [ -n "${OFFLOADS:-}" ]; then
+  for offload in $OFFLOADS; do
+    MATRIX_ARGS+=(--offload "$offload")
+  done
+fi
+if [ -n "${CUDA_GRAPHS:-}" ]; then
+  for cuda_graph in $CUDA_GRAPHS; do
+    MATRIX_ARGS+=(--cuda-graph "$cuda_graph")
+  done
+fi
+
+set +e
+python benchmarks/cola_memory/run_matrix.py --continue-on-error "${MATRIX_ARGS[@]}" "$@"
+MATRIX_STATUS=$?
+set -e
+python benchmarks/cola_memory/parse_results.py --results-root "$RESULTS_ROOT"
+exit "$MATRIX_STATUS"

@@ -1,6 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 import copy
 import logging
+import os
 import warnings
 from collections import defaultdict
 from dataclasses import astuple
@@ -487,6 +488,13 @@ def _get_megatron_optimizer_based_on_param_groups(
     """
     # All param_groups passed here must belong to the same optimizer type (adam / sgd).
     # Callers are responsible for splitting by optimizer type before calling this function.
+    use_megatron_fsdp = any(
+        getattr(getattr(model_chunk, "ddp_config", None), "use_megatron_fsdp", False)
+        for model_chunk in model_chunks
+    )
+    use_torch_optimizer_for_megatron_fsdp = (
+        use_megatron_fsdp and os.environ.get("MEGATRON_FSDP_USE_TORCH_OPTIMIZER") == "1"
+    )
 
     if skip_megatron_wrapping and config.use_precision_aware_optimizer:
         raise ValueError(
@@ -553,7 +561,7 @@ def _get_megatron_optimizer_based_on_param_groups(
 
             # set Adam class and weight decay mode depending
             # on source of optimizer (Torch or TE/Apex)
-            if USING_PYTORCH_OPTIMIZER:
+            if USING_PYTORCH_OPTIMIZER or use_torch_optimizer_for_megatron_fsdp:
                 adam_cls = torch.optim.AdamW if config.decoupled_weight_decay else torch.optim.Adam
             else:
                 kwargs["adam_w_mode"] = config.decoupled_weight_decay

@@ -1844,6 +1844,11 @@ def _add_inference_args(parser):
                        'it is transformed to an empty list in validate_args. The deprecated values '
                        '"full_iteration" and "full_iteration_inference" are also accepted and migrated '
                        'to the new API in validate_args.')
+    group.add_argument('--cuda-graph-use-single-mempool', action=argparse.BooleanOptionalAction,
+                       default=True,
+                       help='Use a shared CUDA graph memory pool for full-iteration and optimizer CUDA graphs.')
+    group.add_argument('--cuda-graph-retain-backward-graph', action='store_true', default=False,
+                       help='Retain backward CUDA graphs after capture.')
     group.add_argument('--use-legacy-static-engine', action='store_true', default=False,
                        help='Use legacy static engine. (Current static engine uses dynamic engine under the hood)',
                        dest='use_legacy_static_engine')
@@ -3253,6 +3258,13 @@ def _add_experimental_args(parser):
                        'To use local spec specify local as the argument.'
                        'For more details, see the model class, '
                        '`transformer_block.py`, or `transformer_layer.py`')
+    group.add_argument(
+        '--model-impl',
+        type=str,
+        default='baseline',
+        choices=['baseline', 'cola'],
+        help='GPT implementation to instantiate. "cola" uses low-rank CoLA attention and MLP submodules.',
+    )
     group.add_argument('--hybrid-layer-pattern', type=str, default=None,
                        help='Specify a hybrid layer pattern using M (mamba), G (gdn), '
                        '* (attention), D (dsa), - (mlp), E (moe). Use | to define pipeline '

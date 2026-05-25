@@ -1,0 +1,20 @@
+{
+  "run_id": "smoke_baseline_7169995.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov",
+  "model_size": "tiny",
+  "model_impl": "baseline",
+  "strategy": "baseline",
+  "offload": "0",
+  "cuda_graph": "0",
+  "train_iters": "2",
+  "warmup_iters": "0",
+  "gpus_per_node": "1",
+  "nnodes": "1",
+  "hidden_size": "128",
+  "ffn_hidden_size": "352",
+  "num_layers": "2",
+  "num_heads": "4",
+  "seq_length": "128",
+  "mlp_rank": "32",
+  "attn_rank": "32",
+  "log_file": "/home/zhengyangwang/offloading/ATC-Megatron/benchmarks/cola_memory/results/smoke_7169995.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov/logs/smoke_baseline_7169995.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov.log"
+}

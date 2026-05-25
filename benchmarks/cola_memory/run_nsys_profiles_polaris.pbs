@@ -1,0 +1,89 @@
+#!/bin/bash -l
+#PBS -N cola_nsys
+#PBS -A TensorCompress
+#PBS -q debug
+#PBS -l select=1:ncpus=64:ngpus=4
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -j oe
+
+set -euo pipefail
+
+module use /soft/modulefiles
+module load conda cudatoolkit-standalone/12.4.1
+set +u
+conda activate dspeed_env
+set -u
+
+ROOT_DIR=${ROOT_DIR:-/home/$USER/offloading/ATC-Megatron}
+cd "$ROOT_DIR"
+
+export TMPDIR=${TMPDIR:-/var/tmp/pbs.${PBS_JOBID}}
+EAGLE_PROJECT_DIR=${EAGLE_PROJECT_DIR:-/eagle/TensorCompress/$USER}
+if [ -d "$EAGLE_PROJECT_DIR" ] && [ -w "$EAGLE_PROJECT_DIR" ]; then
+  DEFAULT_RESULTS_ROOT="$EAGLE_PROJECT_DIR/atc_megatron_cola/${PBS_JOBID}"
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-$EAGLE_PROJECT_DIR/cache/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$EAGLE_PROJECT_DIR/cache/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$EAGLE_PROJECT_DIR/cache/torch_extensions}
+else
+  DEFAULT_RESULTS_ROOT="$ROOT_DIR/benchmarks/cola_memory/results/${PBS_JOBID}"
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-$TMPDIR/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$TMPDIR/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$TMPDIR/torch_extensions}
+fi
+export RESULTS_ROOT=${RESULTS_ROOT:-$DEFAULT_RESULTS_ROOT}
+mkdir -p "$TMPDIR" "$PIP_CACHE_DIR" "$UV_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" "$RESULTS_ROOT"
+
+export NNODES=$(awk '!seen[$0]++' "$PBS_NODEFILE" | wc -l)
+export GPUS_PER_NODE=4
+export MASTER_ADDR=$(head -n 1 "$PBS_NODEFILE")
+export MASTER_PORT=${MASTER_PORT:-$((10000 + RANDOM % 50000))}
+export PYTHON=${PYTHON:-$(which python)}
+
+export MODEL_SIZE=3b
+export NUM_LAYERS=4
+export STRATEGY=distopt
+export TRAIN_ITERS=12
+export RUN_TIMEOUT_SECONDS=${RUN_TIMEOUT_SECONDS:-900}
+export TIMING_LOG_LEVEL=0
+export PROFILE_NSYS=1
+export PROFILE_STEP_START=7
+export PROFILE_STEP_END=10
+export PROFILE_RANKS=0
+
+echo "PBS_JOBID=$PBS_JOBID"
+echo "ROOT_DIR=$ROOT_DIR"
+echo "RESULTS_ROOT=$RESULTS_ROOT"
+echo "NNODES=$NNODES GPUS_PER_NODE=$GPUS_PER_NODE MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT"
+cat "$PBS_NODEFILE"
+
+failures=0
+run_profile() {
+  local model_impl=$1
+  local offload=$2
+  local cuda_graph=$3
+  local label=$4
+
+  export MODEL_IMPL="$model_impl"
+  export OFFLOAD="$offload"
+  export CUDA_GRAPH="$cuda_graph"
+  export RUN_ID="nsys_${label}"
+  echo "==> $RUN_ID"
+  set +e
+  benchmarks/cola_memory/run_one.sh
+  local status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    failures=$((failures + 1))
+    echo "FAILED ($status): $RUN_ID" >&2
+  fi
+  unset RUN_ID
+}
+
+run_profile baseline 0 0 baseline_distopt
+run_profile cola 1 0 cola_distopt_offload
+run_profile cola 0 1 cola_distopt_cudagraph
+run_profile baseline 1 0 baseline_distopt_offload
+
+python benchmarks/cola_memory/parse_results.py --results-root "$RESULTS_ROOT"
+exit "$failures"
