@@ -1,4 +1,5 @@
 # Copyright (c) 2025, NVIDIA CORPORATION and Alibaba PAI. All rights reserved.
+import os
 from collections import defaultdict
 from typing import Dict
 
@@ -17,6 +18,27 @@ def _local_tensor(tensor):
 
 def _copy_tensor_data(dst, src, non_blocking: bool = False):
     _local_tensor(dst).data.copy_(_local_tensor(src).data, non_blocking=non_blocking)
+
+
+def _foreach_copy_tensor_data(dst_tensors, src_tensors, non_blocking: bool = False):
+    if not dst_tensors:
+        return
+    torch._foreach_copy_(
+        [_local_tensor(tensor).data for tensor in dst_tensors],
+        [_local_tensor(tensor).data for tensor in src_tensors],
+        non_blocking=non_blocking,
+    )
+
+
+def _can_use_single_slab(tensors):
+    if not tensors:
+        return False
+    first = _local_tensor(tensors[0])
+    return all(
+        _local_tensor(tensor).dtype == first.dtype
+        and _local_tensor(tensor).device == first.device
+        for tensor in tensors
+    )
 
 
 class HybridDeviceOptimizer(torch.optim.Optimizer):
@@ -84,6 +106,8 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
         self.overlap_cpu_optimizer_d2h_h2d = overlap_cpu_optimizer_d2h_h2d
         self.param_update_in_fp32 = param_update_in_fp32
         self.sub_optimizer_kwargs = kwargs
+        self.foreach_copy = os.getenv("MEGATRON_CPU_OFFLOAD_FOREACH_COPY", "0") == "1"
+        self.slab_copy = os.getenv("MEGATRON_CPU_OFFLOAD_SLAB_COPY", "0") == "1"
 
         self._init_sub_optimizers()
         self._register_load_state_dict_hooks()
@@ -105,6 +129,9 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
 
         # Sync the grads from GPU to CPU.
         for optimizer in self.cpu_optimizers:
+            foreach_grad_dsts = []
+            foreach_grad_srcs = []
+            slab_grad_pairs = []
             for param in _param_generator(optimizer):
                 gpu_param = self.cpu_copys_map_gpu_param[param]
                 grad = getattr(gpu_param, "decoupled_grad", gpu_param.grad)
@@ -113,23 +140,102 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
                     continue
 
                 param.requires_grad = False
-                if param not in self.cpu_copy_map_grad:
+                if self.slab_copy:
+                    slab_grad_pairs.append((param, grad))
+                elif param not in self.cpu_copy_map_grad:
                     self.cpu_copy_map_grad[param] = torch.empty(
                         param.shape, dtype=param.dtype, pin_memory=self.pin_cpu_grads, device="cpu"
                     )
                     param.grad = self.cpu_copy_map_grad[param]
 
-                self.cpu_copy_map_grad[param].data.copy_(_local_tensor(grad), non_blocking=True)
+                if self.slab_copy:
+                    continue
+                elif self.foreach_copy:
+                    foreach_grad_dsts.append(self.cpu_copy_map_grad[param])
+                    foreach_grad_srcs.append(grad)
+                else:
+                    self.cpu_copy_map_grad[param].data.copy_(
+                        _local_tensor(grad), non_blocking=True
+                    )
+            if self.slab_copy and slab_grad_pairs:
+                self._copy_grads_to_cpu_slab(optimizer, slab_grad_pairs)
+            if self.foreach_copy:
+                _foreach_copy_tensor_data(foreach_grad_dsts, foreach_grad_srcs, non_blocking=True)
             self._cpu_optimizer_map_data_event[optimizer] = self._d2h_stream.record_event()
+
+    def _copy_grads_to_cpu_slab(self, optimizer, grad_pairs):
+        cpu_params = [item[0] for item in grad_pairs]
+        gpu_grads = [item[1] for item in grad_pairs]
+        if len(grad_pairs) <= 1 or not _can_use_single_slab(cpu_params):
+            for param, grad in grad_pairs:
+                if param not in self.cpu_copy_map_grad:
+                    self.cpu_copy_map_grad[param] = torch.empty(
+                        param.shape, dtype=param.dtype, pin_memory=self.pin_cpu_grads, device="cpu"
+                    )
+                    param.grad = self.cpu_copy_map_grad[param]
+                self.cpu_copy_map_grad[param].data.copy_(_local_tensor(grad), non_blocking=True)
+            return
+
+        first_param = _local_tensor(cpu_params[0])
+        first_grad = _local_tensor(gpu_grads[0])
+        total_numel = sum(_local_tensor(param).numel() for param in cpu_params)
+        cache = self._cpu_optimizer_map_grad_slab.get(optimizer)
+        if (
+            cache is None
+            or cache["numel"] < total_numel
+            or cache["dtype"] != first_param.dtype
+            or cache["device"] != first_grad.device
+        ):
+            cache = {
+                "numel": total_numel,
+                "dtype": first_param.dtype,
+                "device": first_grad.device,
+                "cpu": torch.empty(
+                    total_numel,
+                    dtype=first_param.dtype,
+                    pin_memory=self.pin_cpu_grads,
+                    device="cpu",
+                ),
+                "gpu": torch.empty(total_numel, dtype=first_param.dtype, device=first_grad.device),
+            }
+            self._cpu_optimizer_map_grad_slab[optimizer] = cache
+
+        cpu_slab = cache["cpu"][:total_numel]
+        gpu_slab = cache["gpu"][:total_numel]
+        offset = 0
+        for param, grad in grad_pairs:
+            local_param = _local_tensor(param)
+            numel = local_param.numel()
+            cpu_view = cpu_slab[offset : offset + numel].view_as(local_param)
+            gpu_view = gpu_slab[offset : offset + numel].view_as(local_param)
+            gpu_view.copy_(_local_tensor(grad), non_blocking=True)
+            self.cpu_copy_map_grad[param] = cpu_view
+            param.grad = cpu_view
+            offset += numel
+        cpu_slab.copy_(gpu_slab, non_blocking=True)
 
     def _register_param_copy_back_gpu_hook(self):
         def param_copy_back_gpu_hook_closure():
             def param_copy_back_gpu_hook(optimizer, args, kwargs):
                 self._h2d_stream.wait_stream(torch.cuda.current_stream())
                 with torch.cuda.stream(self._h2d_stream):
-                    for param in _param_generator(optimizer):
+                    params = list(_param_generator(optimizer))
+                    if self.slab_copy and self._copy_params_to_gpu_slab(optimizer, params):
+                        self._h2d_stream.record_event().wait(torch.cuda.current_stream())
+                        return
+                    foreach_param_dsts = []
+                    foreach_param_srcs = []
+                    for param in params:
                         gpu_param = self.cpu_copys_map_gpu_param[param]
-                        _copy_tensor_data(gpu_param, param, non_blocking=True)
+                        if self.foreach_copy:
+                            foreach_param_dsts.append(gpu_param)
+                            foreach_param_srcs.append(param)
+                        else:
+                            _copy_tensor_data(gpu_param, param, non_blocking=True)
+                    if self.foreach_copy:
+                        _foreach_copy_tensor_data(
+                            foreach_param_dsts, foreach_param_srcs, non_blocking=True
+                        )
                 self._h2d_stream.record_event().wait(torch.cuda.current_stream())
 
             return param_copy_back_gpu_hook
@@ -154,6 +260,55 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
                 optimizer.register_step_post_hook(param_copy_back_gpu_hook_closure())
             elif self.param_update_in_fp32:
                 optimizer.register_step_post_hook(fp32_param_copy_back_gpu_hook_closure())
+
+    def _copy_params_to_gpu_slab(self, optimizer, params):
+        if len(params) <= 1 or not _can_use_single_slab(params):
+            return False
+        gpu_params = [self.cpu_copys_map_gpu_param[param] for param in params]
+        first_param = _local_tensor(params[0])
+        first_gpu_param = _local_tensor(gpu_params[0])
+        total_numel = sum(_local_tensor(param).numel() for param in params)
+        cache = self._cpu_optimizer_map_param_slab.get(optimizer)
+        if (
+            cache is None
+            or cache["numel"] < total_numel
+            or cache["dtype"] != first_param.dtype
+            or cache["device"] != first_gpu_param.device
+        ):
+            cache = {
+                "numel": total_numel,
+                "dtype": first_param.dtype,
+                "device": first_gpu_param.device,
+                "cpu": torch.empty(
+                    total_numel,
+                    dtype=first_param.dtype,
+                    pin_memory=self.pin_cpu_params,
+                    device="cpu",
+                ),
+                "gpu": torch.empty(total_numel, dtype=first_param.dtype, device=first_gpu_param.device),
+            }
+            self._cpu_optimizer_map_param_slab[optimizer] = cache
+
+        cpu_slab = cache["cpu"][:total_numel]
+        gpu_slab = cache["gpu"][:total_numel]
+        offset = 0
+        for param in params:
+            local_param = _local_tensor(param)
+            numel = local_param.numel()
+            cpu_slab[offset : offset + numel].view_as(local_param).copy_(local_param)
+            offset += numel
+        gpu_slab.copy_(cpu_slab, non_blocking=True)
+
+        offset = 0
+        for param, gpu_param in zip(params, gpu_params):
+            local_param = _local_tensor(param)
+            numel = local_param.numel()
+            _local_tensor(gpu_param).data.copy_(
+                gpu_slab[offset : offset + numel].view_as(local_param),
+                non_blocking=True,
+            )
+            offset += numel
+        return True
 
     def step(self, closure=None):
         """
@@ -222,6 +377,8 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
             self.gpu_optimizer = None
 
         self.cpu_copy_map_grad: Dict[torch.Tensor, torch.Tensor] = defaultdict(torch.Tensor)
+        self._cpu_optimizer_map_grad_slab = dict()
+        self._cpu_optimizer_map_param_slab = dict()
         self._d2h_stream = torch.cuda.current_stream()
         self._h2d_stream = torch.cuda.current_stream()
         if self.overlap_cpu_optimizer_d2h_h2d:
@@ -243,6 +400,32 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
         cpu_optimizers = []
 
         if len(cpu_param_groups) == 0:
+            return cpu_optimizers
+
+        group_numel = int(os.getenv("MEGATRON_CPU_OFFLOAD_GROUP_NUMEL", "0") or "0")
+        if group_numel > 0:
+            for group in cpu_param_groups:
+                group_defaults = group.copy()
+                params = group_defaults.pop("params")
+                if isinstance(params, torch.Tensor):
+                    params = [params]
+
+                bucket = []
+                bucket_numel = 0
+                for param in params:
+                    if bucket and bucket_numel + param.numel() > group_numel:
+                        _cpu_param_group = group_defaults.copy()
+                        _cpu_param_group["params"] = bucket
+                        cpu_optimizers.append(cpu_optimizer_cls([_cpu_param_group]))
+                        bucket = []
+                        bucket_numel = 0
+                    bucket.append(param)
+                    bucket_numel += param.numel()
+
+                if bucket:
+                    _cpu_param_group = group_defaults.copy()
+                    _cpu_param_group["params"] = bucket
+                    cpu_optimizers.append(cpu_optimizer_cls([_cpu_param_group]))
             return cpu_optimizers
 
         for group in cpu_param_groups:

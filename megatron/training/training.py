@@ -60,6 +60,7 @@ from megatron.core.optimizer.layer_wise_optimizer import (
 from megatron.core.optimizer_param_scheduler import get_canonical_lr_for_logging
 
 from .log_handler import CustomHandler
+from .memory_liveness import capture_memory_liveness_snapshot
 
 # Make default logging level INFO, but filter out all log messages not from MCore.
 logging.basicConfig(handlers=[CustomHandler()], level=logging.INFO)
@@ -2226,6 +2227,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
             adjust_tensor_shapes_fn=adjust_tensor_shapes_fn,
             force_all_reduce=save_wgrads_in_this_iteration,
         )
+        capture_memory_liveness_snapshot("post_backward", iteration=iteration)
         if save_activations_in_this_iteration:
             save_activations(iteration + 1)
             disable_activation_logging()
@@ -2275,6 +2277,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
 
     timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
     update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
+    capture_memory_liveness_snapshot("post_optimizer_step", iteration=iteration)
 
     # get max attention logit for logging and run clip_qk()
     # Part of MuonClip Optimizer step
@@ -3238,6 +3241,7 @@ def train(
 
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
+    capture_memory_liveness_snapshot("post_init", iteration=iteration)
 
     # GPU sniff test at start of training.
     if args.gpu_sniff_test_interval is not None:
@@ -3630,6 +3634,8 @@ def train(
         )
         num_floating_point_operations_so_far += num_floating_point_operations_in_batch
         num_floating_point_operations_since_last_log_event += num_floating_point_operations_in_batch
+        if iteration == start_iteration + 10:
+            capture_memory_liveness_snapshot("steady_state_after_iter_10", iteration=iteration)
 
         # Logging.
         if optimizer is not None and not optimizer.is_stub_optimizer:

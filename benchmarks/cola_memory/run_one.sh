@@ -147,6 +147,28 @@ if [ "$TIMING_LOG_LEVEL" != "0" ]; then
   COMMON_ARGS+=(--timing-log-level "$TIMING_LOG_LEVEL" --timing-log-option "$TIMING_LOG_OPTION")
 fi
 
+if [ "${OVERLAP_GRAD_REDUCE:-0}" = "1" ]; then
+  COMMON_ARGS+=(--overlap-grad-reduce)
+fi
+if [ -n "${DDP_NUM_BUCKETS:-}" ]; then
+  COMMON_ARGS+=(--ddp-num-buckets "$DDP_NUM_BUCKETS")
+fi
+if [ -n "${DDP_BUCKET_SIZE:-}" ]; then
+  COMMON_ARGS+=(--ddp-bucket-size "$DDP_BUCKET_SIZE")
+fi
+if [ "${DDP_PAD_BUCKETS_FOR_HIGH_NCCL_BUSBW:-0}" = "1" ]; then
+  COMMON_ARGS+=(--ddp-pad-buckets-for-high-nccl-busbw)
+fi
+if [ "${OVERLAP_PARAM_GATHER:-0}" = "1" ]; then
+  COMMON_ARGS+=(--overlap-param-gather)
+fi
+if [ "${OVERLAP_PARAM_GATHER_WITH_OPTIMIZER_STEP:-0}" = "1" ]; then
+  COMMON_ARGS+=(--overlap-param-gather-with-optimizer-step)
+fi
+if [ "${CREATE_ALL_GATHER_GROUP:-0}" = "1" ]; then
+  COMMON_ARGS+=(--create-all-gather-group)
+fi
+
 STRATEGY_ARGS=()
 case "$STRATEGY" in
   baseline)
@@ -180,6 +202,11 @@ case "$STRATEGY" in
         if [ "${FSDP_DOUBLE_BUFFER:-0}" = "1" ]; then
           STRATEGY_ARGS+=(--fsdp-double-buffer)
         fi
+        if [ -n "${FSDP_SUGGESTED_COMMUNICATION_UNIT_SIZE:-}" ]; then
+          STRATEGY_ARGS+=(
+            --suggested-communication-unit-size "$FSDP_SUGGESTED_COMMUNICATION_UNIT_SIZE"
+          )
+        fi
         if [ "${FSDP_INIT_MODEL_WITH_META_DEVICE:-0}" = "1" ]; then
           STRATEGY_ARGS+=(--init-model-with-meta-device)
         fi
@@ -207,7 +234,26 @@ case "$STRATEGY" in
 esac
 
 if [ "$OFFLOAD" = "1" ]; then
-  STRATEGY_ARGS+=(--optimizer-cpu-offload --use-precision-aware-optimizer)
+  STRATEGY_ARGS+=(
+    --optimizer-cpu-offload
+    --optimizer-offload-fraction "${OPTIMIZER_OFFLOAD_FRACTION:-1.0}"
+    --use-precision-aware-optimizer
+  )
+  if [ "${OVERLAP_CPU_OPTIMIZER_D2H_H2D:-0}" = "1" ]; then
+    STRATEGY_ARGS+=(--overlap-cpu-optimizer-d2h-h2d)
+  fi
+  if [ "${USE_TORCH_OPTIMIZER_FOR_CPU_OFFLOAD:-0}" = "1" ]; then
+    STRATEGY_ARGS+=(--use-torch-optimizer-for-cpu-offload)
+  fi
+  if [ "${PIN_CPU_GRADS:-1}" = "0" ]; then
+    STRATEGY_ARGS+=(--no-pin-cpu-grads)
+  fi
+  if [ "${PIN_CPU_PARAMS:-1}" = "0" ]; then
+    STRATEGY_ARGS+=(--no-pin-cpu-params)
+  fi
+  if [ -n "${CPU_OFFLOAD_OVERLAP_GROUP_NUMEL:-}" ]; then
+    export MEGATRON_CPU_OFFLOAD_GROUP_NUMEL="$CPU_OFFLOAD_OVERLAP_GROUP_NUMEL"
+  fi
   if [ "$STRATEGY" != "fsdp" ] || [ "$FSDP_IMPL" != "torch" ]; then
     if [[ " ${STRATEGY_ARGS[*]} " != *" --use-distributed-optimizer "* ]]; then
       STRATEGY_ARGS+=(--use-distributed-optimizer)
@@ -216,7 +262,20 @@ if [ "$OFFLOAD" = "1" ]; then
 fi
 
 if [ "$CUDA_GRAPH" = "1" ]; then
-  STRATEGY_ARGS+=(--cuda-graph-impl full_iteration --no-check-for-nan-in-loss-and-grad)
+  STRATEGY_ARGS+=(
+    --cuda-graph-impl "${CUDA_GRAPH_IMPL:-full_iteration}"
+    --no-check-for-nan-in-loss-and-grad
+  )
+  if [ -n "${CUDA_GRAPH_MODULES:-}" ]; then
+    read -r -a CUDA_GRAPH_MODULES_ARRAY <<< "$CUDA_GRAPH_MODULES"
+    STRATEGY_ARGS+=(--cuda-graph-modules "${CUDA_GRAPH_MODULES_ARRAY[@]}")
+  fi
+  if [ "${CUDA_GRAPH_USE_SINGLE_MEMPOOL:-1}" = "0" ]; then
+    STRATEGY_ARGS+=(--no-cuda-graph-use-single-mempool)
+  fi
+  if [ "${CUDA_GRAPH_RETAIN_BACKWARD_GRAPH:-0}" = "1" ]; then
+    STRATEGY_ARGS+=(--cuda-graph-retain-backward-graph)
+  fi
 fi
 
 if [ "$PROFILE_NSYS" = "1" ]; then
@@ -279,17 +338,40 @@ cat > "$META_FILE" <<JSON
   "cuda_launch_blocking": "${CUDA_LAUNCH_BLOCKING:-}",
   "torch_nccl_async_error_handling": "${TORCH_NCCL_ASYNC_ERROR_HANDLING:-}",
   "cuda_device_max_connections": "${CUDA_DEVICE_MAX_CONNECTIONS:-}",
+  "overlap_grad_reduce": "${OVERLAP_GRAD_REDUCE:-0}",
+  "ddp_num_buckets": "${DDP_NUM_BUCKETS:-}",
+  "ddp_bucket_size": "${DDP_BUCKET_SIZE:-}",
+  "ddp_pad_buckets_for_high_nccl_busbw": "${DDP_PAD_BUCKETS_FOR_HIGH_NCCL_BUSBW:-0}",
+  "overlap_param_gather": "${OVERLAP_PARAM_GATHER:-0}",
+  "overlap_param_gather_with_optimizer_step": "${OVERLAP_PARAM_GATHER_WITH_OPTIMIZER_STEP:-0}",
+  "create_all_gather_group": "${CREATE_ALL_GATHER_GROUP:-0}",
+  "optimizer_offload_fraction": "${OPTIMIZER_OFFLOAD_FRACTION:-1.0}",
+  "overlap_cpu_optimizer_d2h_h2d": "${OVERLAP_CPU_OPTIMIZER_D2H_H2D:-0}",
+  "use_torch_optimizer_for_cpu_offload": "${USE_TORCH_OPTIMIZER_FOR_CPU_OFFLOAD:-0}",
+  "pin_cpu_grads": "${PIN_CPU_GRADS:-1}",
+  "pin_cpu_params": "${PIN_CPU_PARAMS:-1}",
+  "cpu_offload_overlap_group_numel": "${CPU_OFFLOAD_OVERLAP_GROUP_NUMEL:-}",
+  "cpu_offload_foreach_copy": "${MEGATRON_CPU_OFFLOAD_FOREACH_COPY:-0}",
+  "cpu_offload_slab_copy": "${MEGATRON_CPU_OFFLOAD_SLAB_COPY:-0}",
   "fsdp_use_precision_aware_optimizer": "${FSDP_USE_PRECISION_AWARE_OPTIMIZER:-0}",
   "fsdp_grad_reduce_in_bf16": "${FSDP_GRAD_REDUCE_IN_BF16:-0}",
   "fsdp_use_nccl_ub": "${FSDP_USE_NCCL_UB:-0}",
   "fsdp_double_buffer": "${FSDP_DOUBLE_BUFFER:-0}",
+  "fsdp_suggested_communication_unit_size": "${FSDP_SUGGESTED_COMMUNICATION_UNIT_SIZE:-}",
   "fsdp_init_model_with_meta_device": "${FSDP_INIT_MODEL_WITH_META_DEVICE:-0}",
   "fsdp_use_torch_optimizer": "${FSDP_USE_TORCH_OPTIMIZER:-0}",
+  "cuda_graph_impl": "${CUDA_GRAPH_IMPL:-full_iteration}",
+  "cuda_graph_modules": "${CUDA_GRAPH_MODULES:-}",
+  "cuda_graph_use_single_mempool": "${CUDA_GRAPH_USE_SINGLE_MEMPOOL:-1}",
+  "cuda_graph_retain_backward_graph": "${CUDA_GRAPH_RETAIN_BACKWARD_GRAPH:-0}",
   "profile_nsys": "$PROFILE_NSYS",
   "profile_step_start": "$PROFILE_STEP_START",
   "profile_step_end": "$PROFILE_STEP_END",
   "profile_ranks": "$PROFILE_RANKS",
   "nsys_output": "$NSYS_OUTPUT",
+  "memory_snapshot_phases": "${MEMORY_SNAPSHOT_PHASES:-0}",
+  "memory_snapshot_dir": "${MEMORY_SNAPSHOT_DIR:-}",
+  "memory_snapshot_ranks": "${MEMORY_SNAPSHOT_RANKS:-}",
   "log_file": "$LOG_FILE"
 }
 JSON
