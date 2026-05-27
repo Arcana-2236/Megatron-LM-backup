@@ -76,10 +76,11 @@ def _add_deepspeed_wrapper_args(parser):
 class _DeepSpeedModelAdapter(torch.nn.Module):
     """Expose the ATC model-chunk surface while forwarding through DeepSpeed."""
 
-    def __init__(self, engine):
+    def __init__(self, engine, owns_optimizer=False):
         super().__init__()
         self.engine = engine
         self.module = engine.module
+        self.owns_optimizer = owns_optimizer
         self._atc_deepspeed_engine = engine
 
     @property
@@ -98,6 +99,27 @@ class _DeepSpeedModelAdapter(torch.nn.Module):
             return self.module.zero_grad_buffer()
         return None
 
+    def finish_grad_sync(self, *args, **kwargs):
+        if not self.owns_optimizer and hasattr(self.module, "finish_grad_sync"):
+            return self.module.finish_grad_sync(*args, **kwargs)
+        return None
+
+    def start_grad_sync(self, *args, **kwargs):
+        if not self.owns_optimizer and hasattr(self.module, "start_grad_sync"):
+            return self.module.start_grad_sync(*args, **kwargs)
+        return None
+
+    def scale_gradients(self, scaling_factor):
+        if not self.owns_optimizer and hasattr(self.module, "scale_gradients"):
+            return self.module.scale_gradients(scaling_factor)
+        for param in self.module.parameters():
+            main_grad = getattr(param, "main_grad", None)
+            if main_grad is not None:
+                main_grad.mul_(scaling_factor)
+            elif param.grad is not None:
+                param.grad.mul_(scaling_factor)
+        return None
+
     def broadcast_params(self):
         if hasattr(self.module, "broadcast_params"):
             return self.module.broadcast_params()
@@ -112,11 +134,10 @@ class _DeepSpeedModelAdapter(torch.nn.Module):
 
 
 class _DeepSpeedOptimizerAdapter:
-    """Small adapter for the optional DeepSpeed optimizer-step experiment."""
+    """Expose the optimizer surface Megatron's loop expects for DeepSpeed."""
 
-    def __init__(self, engine, fallback_optimizer):
+    def __init__(self, engine):
         self.engine = engine
-        self.fallback_optimizer = fallback_optimizer
         self.optimizer = engine.optimizer
         self.is_stub_optimizer = False
 
@@ -124,14 +145,33 @@ class _DeepSpeedOptimizerAdapter:
     def param_groups(self):
         if self.optimizer is not None and hasattr(self.optimizer, "param_groups"):
             return self.optimizer.param_groups
-        return self.fallback_optimizer.param_groups
+        inner_optimizer = getattr(self.optimizer, "optimizer", None)
+        if inner_optimizer is not None and hasattr(inner_optimizer, "param_groups"):
+            return inner_optimizer.param_groups
+        return []
 
     def zero_grad(self, *args, **kwargs):
-        self.engine.zero_grad(*args, **kwargs)
+        self.engine.zero_grad()
+        for param in self.engine.module.parameters():
+            main_grad = getattr(param, "main_grad", None)
+            if main_grad is not None:
+                main_grad.zero_()
+
+    def scale_loss(self, loss):
+        # DeepSpeed applies its own loss scaling inside engine.backward().
+        return loss
 
     def step(self, *args, **kwargs):
+        for param in self.engine.module.parameters():
+            main_grad = getattr(param, "main_grad", None)
+            if main_grad is not None:
+                param.grad = main_grad
         self.engine.step(*args, **kwargs)
-        return True, None, None
+        update_successful = bool(getattr(self.engine, "_step_applied", True))
+        grad_norm = getattr(self.engine, "_global_grad_norm", None)
+        if isinstance(grad_norm, torch.Tensor):
+            grad_norm = grad_norm.detach()
+        return update_successful, grad_norm, None
 
     def get_loss_scale(self):
         if hasattr(self.engine, "loss_scale"):
@@ -143,22 +183,20 @@ class _DeepSpeedOptimizerAdapter:
         return torch.tensor([float(value)], device=torch.cuda.current_device())
 
     def reload_model_params(self):
-        if hasattr(self.fallback_optimizer, "reload_model_params"):
-            return self.fallback_optimizer.reload_model_params()
         return None
 
     def state_dict(self):
         if self.optimizer is not None and hasattr(self.optimizer, "state_dict"):
             return self.optimizer.state_dict()
-        return self.fallback_optimizer.state_dict()
+        return {}
 
     def load_state_dict(self, state_dict):
         if self.optimizer is not None and hasattr(self.optimizer, "load_state_dict"):
             return self.optimizer.load_state_dict(state_dict)
-        return self.fallback_optimizer.load_state_dict(state_dict)
+        return None
 
     def __getattr__(self, name):
-        return getattr(self.fallback_optimizer, name)
+        return getattr(self.optimizer, name)
 
 
 class _DeepSpeedMPUAdapter:
@@ -230,7 +268,7 @@ class _DeepSpeedMPUAdapter:
         return mpu.get_data_parallel_group()
 
 
-def _default_deepspeed_config(args):
+def _default_deepspeed_config(args, include_optimizer=False):
     grad_accum = get_num_microbatches()
     data_parallel_size = mpu.get_data_parallel_world_size()
     config = {
@@ -239,6 +277,24 @@ def _default_deepspeed_config(args):
         "train_batch_size": args.micro_batch_size * grad_accum * data_parallel_size,
         "zero_optimization": {"stage": args.deepspeed_zero_stage},
     }
+    if include_optimizer:
+        if args.optimizer != "adam":
+            raise RuntimeError(
+                "The default DeepSpeed optimizer config currently supports "
+                "ATC --optimizer adam only. Pass --deepspeed_config for other "
+                "DeepSpeed optimizer setups."
+            )
+        config["optimizer"] = {
+            "type": "AdamW",
+            "params": {
+                "lr": args.lr,
+                "betas": [args.adam_beta1, args.adam_beta2],
+                "eps": args.adam_eps,
+                "weight_decay": args.weight_decay,
+            },
+        }
+        if args.clip_grad > 0:
+            config["gradient_clipping"] = args.clip_grad
     if args.fp16:
         config["fp16"] = {"enabled": True}
     if args.bf16:
@@ -246,13 +302,40 @@ def _default_deepspeed_config(args):
     return config
 
 
-def _extract_torch_optimizer(optimizer):
-    if optimizer is None:
-        return None
-    torch_optimizer = getattr(optimizer, "optimizer", None)
-    if isinstance(torch_optimizer, torch.optim.Optimizer):
-        return torch_optimizer
+def _get_model_config(model):
+    config = getattr(model, "config", None)
+    if config is not None:
+        return config
+    module = getattr(model, "module", None)
+    if module is not None:
+        return getattr(module, "config", None)
     return None
+
+
+def _configure_deepspeed_ownership(model, engine, owns_optimizer):
+    config = _get_model_config(model)
+    if config is None:
+        raise RuntimeError(
+            "DeepSpeed optimizer mode requires access to the model transformer "
+            "config so the training schedule can route backward through the "
+            "DeepSpeed engine."
+        )
+
+    config.deepspeed_engine = engine
+    config.deepspeed_owns_backward = owns_optimizer
+    config.deepspeed_owns_optimizer = owns_optimizer
+
+
+def _install_main_grad_buffers_for_deepspeed(model):
+    """Provide ATC fused linear backward kernels a gradient accumulation target."""
+
+    for param in model.parameters():
+        if param.requires_grad and getattr(param, "main_grad", None) is None:
+            param.main_grad = torch.zeros_like(
+                param.data,
+                dtype=param.dtype,
+                memory_format=torch.preserve_format,
+            )
 
 
 def _install_deepspeed_setup_wrapper():
@@ -261,29 +344,38 @@ def _install_deepspeed_setup_wrapper():
     original_setup = training.setup_model_and_optimizer
 
     def setup_model_and_optimizer_with_deepspeed(*args, **kwargs):
-        model, optimizer, opt_param_scheduler = original_setup(*args, **kwargs)
         megatron_args = training.get_args()
         if not getattr(megatron_args, "deepspeed", False):
-            return model, optimizer, opt_param_scheduler
+            return original_setup(*args, **kwargs)
+
+        owns_optimizer = megatron_args.deepspeed_wrapper_mode == "optimizer"
+        if owns_optimizer:
+            original_skip_train = megatron_args.skip_train
+            original_no_load_optim = megatron_args.no_load_optim
+            megatron_args.skip_train = True
+            megatron_args.no_load_optim = True
+            try:
+                model, _optimizer, _opt_param_scheduler = original_setup(*args, **kwargs)
+            finally:
+                megatron_args.skip_train = original_skip_train
+                megatron_args.no_load_optim = original_no_load_optim
+            optimizer, opt_param_scheduler = None, None
+        else:
+            model, optimizer, opt_param_scheduler = original_setup(*args, **kwargs)
 
         if len(model) != 1:
             raise RuntimeError(
-                "The one-file DeepSpeed wrapper only supports a single ATC model chunk. "
-                "Pipeline or virtual-pipeline DeepSpeed wrapping requires changes in "
-                "Megatron training schedules/checkpointing outside pretrain_gpt_deepspeed.py."
+                "The DeepSpeed wrapper currently supports a single ATC model chunk. "
+                "Pipeline or virtual-pipeline DeepSpeed wrapping requires additional "
+                "schedule/checkpointing support."
             )
 
-        ds_config = megatron_args.deepspeed_config or _default_deepspeed_config(megatron_args)
+        ds_config = (
+            None
+            if megatron_args.deepspeed_config
+            else _default_deepspeed_config(megatron_args, include_optimizer=owns_optimizer)
+        )
         ds_optimizer = None
-        if megatron_args.deepspeed_wrapper_mode == "optimizer":
-            ds_optimizer = _extract_torch_optimizer(optimizer)
-            if ds_optimizer is None:
-                raise RuntimeError(
-                    "--deepspeed-wrapper-mode=optimizer requires the ATC optimizer to expose "
-                    "a plain torch.optim.Optimizer. The current optimizer path does not, so "
-                    "routing optimizer.step through DeepSpeed needs optimizer/framework changes "
-                    "outside pretrain_gpt_deepspeed.py."
-                )
 
         engine, _engine_optimizer, _loader, _engine_scheduler = deepspeed.initialize(
             args=megatron_args,
@@ -295,10 +387,15 @@ def _install_deepspeed_setup_wrapper():
             dist_init_required=False,
             config=ds_config,
         )
-        model = [_DeepSpeedModelAdapter(engine)]
+        if owns_optimizer:
+            _install_main_grad_buffers_for_deepspeed(model[0])
+        _configure_deepspeed_ownership(model[0], engine, owns_optimizer)
+        model = [_DeepSpeedModelAdapter(engine, owns_optimizer=owns_optimizer)]
 
-        if megatron_args.deepspeed_wrapper_mode == "optimizer":
-            optimizer = _DeepSpeedOptimizerAdapter(engine, optimizer)
+        if owns_optimizer:
+            optimizer = _DeepSpeedOptimizerAdapter(engine)
+            if not megatron_args.skip_train:
+                opt_param_scheduler = training.get_optimizer_param_scheduler(optimizer)
 
         return model, optimizer, opt_param_scheduler
 

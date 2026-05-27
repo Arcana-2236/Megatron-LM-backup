@@ -1,0 +1,15 @@
+active_allocated_delta_vs_cola_distopt_gb,inactive_split_delta_gb,likely_cause,reserved_allocated_gap_delta_gb,reserved_inactive_delta_gb,runtime_mode,snapshot_phase
+0.0,0.0,baseline,0.0,0.0,DistOpt,post_init
+-1.2878165245056152,-0.13991785049438477,allocator cache/headroom,0.7370352745056152,0.7370352745056152,DistOpt+offload,post_init
+-8.056437492370605,-0.03145313262939453,unclear,-1.8087968826293945,-1.8087968826293945,FSDP,post_init
+-5.767711162567139,-0.11119508743286133,unclear,-1.6971325874328613,-1.6971325874328613,FSDP+offload,post_init
+0.0,0.0,baseline,0.0,0.0,DistOpt,post_backward
+-3.8607020378112793,-0.2408604621887207,unclear,0.014998912811279297,0.014998912811279297,DistOpt+offload,post_backward
+-10.629323959350586,-0.25739479064941406,unclear,-2.575754165649414,-2.575754165649414,FSDP,post_backward
+-8.340596675872803,-0.22580957412719727,allocator cache/headroom,5.735127925872803,5.735127925872803,FSDP+offload,post_backward
+0.0,0.0,baseline,0.0,0.0,DistOpt,post_optimizer_step
+-3.8607020378112793,-0.2408604621887207,unclear,0.014998912811279297,0.014998912811279297,DistOpt+offload,post_optimizer_step
+-6.949337959289551,-0.22449016571044922,allocator cache/headroom,4.343868732452393,4.343868732452393,FSDP+offload,post_optimizer_step
+0.0,0.0,baseline,0.0,0.0,DistOpt,steady_state_after_iter_10
+-3.8607020378112793,-0.2408604621887207,unclear,0.014998912811279297,0.014998912811279297,DistOpt+offload,steady_state_after_iter_10
+-6.949337482452393,-0.22449064254760742,allocator cache/headroom,4.343868732452393,4.343868732452393,FSDP+offload,steady_state_after_iter_10

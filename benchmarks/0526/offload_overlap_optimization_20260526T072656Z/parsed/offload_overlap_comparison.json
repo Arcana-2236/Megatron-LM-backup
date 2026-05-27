@@ -1,0 +1,72 @@
+[
+  {
+    "run_id": "throughput_3b_cola_distopt_baseline",
+    "variant": "no offload",
+    "iter_ms": 202.54666666666665,
+    "iter_delta_vs_full_offload_ms": -652.0266666666668,
+    "fwd_bwd_ms": 167.59066666666666,
+    "grad_sync_ms": 33.22933333333334,
+    "all_gather_ms": 10.794666666666668,
+    "optimizer_total_ms": 26.448,
+    "optimizer_delta_vs_full_offload_ms": -643.8666666666667,
+    "optimizer_inner_ms": 8.157333333333334,
+    "max_allocated_mb": 17427.84,
+    "reserved_mb": 18098.0
+  },
+  {
+    "run_id": "throughput_3b_cola_distopt_offload_baseline",
+    "variant": "full offload",
+    "iter_ms": 854.5733333333334,
+    "iter_delta_vs_full_offload_ms": 0.0,
+    "fwd_bwd_ms": 175.232,
+    "grad_sync_ms": 33.328,
+    "all_gather_ms": 10.848,
+    "optimizer_total_ms": 670.3146666666667,
+    "optimizer_delta_vs_full_offload_ms": 0.0,
+    "optimizer_inner_ms": 654.0673333333333,
+    "max_allocated_mb": 13464.8,
+    "reserved_mb": 14160.0
+  },
+  {
+    "run_id": "throughput_3b_cola_distopt_offload_overlap_d2h_h2d",
+    "variant": "overlap d2h/h2d",
+    "iter_ms": 1047.52,
+    "iter_delta_vs_full_offload_ms": 192.9466666666666,
+    "fwd_bwd_ms": 227.52866666666665,
+    "grad_sync_ms": 33.28333333333333,
+    "all_gather_ms": 16.466666666666665,
+    "optimizer_total_ms": 806.38,
+    "optimizer_delta_vs_full_offload_ms": 136.06533333333334,
+    "optimizer_inner_ms": 780.706,
+    "max_allocated_mb": 13464.8,
+    "reserved_mb": 14358.0
+  },
+  {
+    "run_id": "throughput_3b_cola_distopt_offload_overlap_group50m",
+    "variant": "overlap + optimizer grouping 50000000",
+    "iter_ms": 1014.6933333333333,
+    "iter_delta_vs_full_offload_ms": 160.1199999999999,
+    "fwd_bwd_ms": 231.7086666666667,
+    "grad_sync_ms": 33.208,
+    "all_gather_ms": 18.266666666666666,
+    "optimizer_total_ms": 768.3246666666668,
+    "optimizer_delta_vs_full_offload_ms": 98.0100000000001,
+    "optimizer_inner_ms": 736.26,
+    "max_allocated_mb": 13464.8,
+    "reserved_mb": 14358.0
+  },
+  {
+    "run_id": "throughput_3b_cola_distopt_offload_fraction_0p5",
+    "variant": "offload fraction 0.5",
+    "iter_ms": 561.0733333333334,
+    "iter_delta_vs_full_offload_ms": -293.5,
+    "fwd_bwd_ms": 181.84466666666668,
+    "grad_sync_ms": 33.224000000000004,
+    "all_gather_ms": 13.783999999999999,
+    "optimizer_total_ms": 369.11066666666665,
+    "optimizer_delta_vs_full_offload_ms": -301.204,
+    "optimizer_inner_ms": 347.988,
+    "max_allocated_mb": 15435.72,
+    "reserved_mb": 15756.0
+  }
+]

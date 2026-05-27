@@ -1,0 +1,81 @@
+# Memory Liveness Progress
+
+Started: 2026-05-26T04:07:51Z
+
+## Log
+
+- 2026-05-26T04:07:51Z - Created results directory `benchmarks/0525/memory_liveness_20260526T040751Z/`.
+- 2026-05-26T04:07:51Z - Loaded relevant repository guidance: `run-on-slurm`, `testing`, `build-and-dependency`, and `linting-and-formatting`.
+- 2026-05-26T04:07:51Z - Found existing CoLA benchmark runner under `benchmarks/cola_memory/` and training memory logging in `megatron/training/training.py` / `megatron/training/utils/common_utils.py`.
+- 2026-05-26T04:11:00Z - Instrumentation added: env-gated `megatron/training/memory_liveness.py` captures raw `torch.cuda.memory_snapshot()` pickles and `torch.cuda.memory_stats()` JSON at `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T04:17:00Z - Parser/report generator added at `parse_memory_liveness.py`; syntax checked with `python3 -m py_compile`.
+- 2026-05-26T04:20:00Z - Run harness added: `run_one_memory_liveness_polaris.pbs` launches one 3B DP=4 row with CUDA Graph disabled, `TRAIN_ITERS=12`, and rank-0 memory snapshots under `raw/<run_id>/`.
+- 2026-05-26T04:21:00Z - Instrumentation metadata added to `benchmarks/cola_memory/run_one.sh` so each run records snapshot enablement, directory, and rank selection in `meta/<run_id>.json`.
+- 2026-05-26T04:22:00Z - Blocker found: required `uv run isort ...` could not run in this login environment because `uv` is not on PATH; fallback `python3 -m isort` and conda Python `-m isort` also failed because `isort` is not installed.
+- 2026-05-26T04:25:00Z - Parser compatibility fixed for the login Python version; empty initial parsed tables and `REPORT.md` scaffold generated successfully.
+- 2026-05-26T04:27:00Z - Blocker found: initial sandboxed `qsub` attempts for the 8-row matrix failed with `Unknown Host` / `cannot connect to server polaris`; prepared `submit_all_memory_liveness.sh` for approved outside-sandbox submission.
+- 2026-05-26T04:28:00Z - Run launched: FullRank + DistOpt submitted as PBS job `7171620.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_fullrank_distopt.log`, snapshots `raw/memlive_3b_fullrank_distopt/`.
+- 2026-05-26T04:28:00Z - Blocker found: subsequent matrix submissions were blocked by PBS queue policy: `would exceed queue generic's per-user limit of jobs in 'Q' state`. Remaining seven rows stay pending until queue capacity opens.
+- 2026-05-26T04:30:00Z - PBS detail check: job `7171620` is queued because the user has reached the debug running-job limit; PBS estimates start time at 2026-05-26T05:03:39Z.
+- 2026-05-26T04:46:33Z - Run completed: FullRank + DistOpt job `7171620.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` finished with PBS `Exit_status=0`.
+- 2026-05-26T04:47:00Z - Snapshot parsed: verified FullRank + DistOpt rank-0 snapshot artifacts are present and `status=ok` for `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T04:48:00Z - Metric extracted: FullRank + DistOpt steady-state row reports active allocated 26.743 GB, inactive split 0.472 GB, reserved inactive 5.720 GB, reserved 32.463 GB, allocated 26.743 GB, active block count 120, inactive split block count 0.
+- 2026-05-26T04:49:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures under `figures/`. Because the snapshot had no `inactive_split` block records, the inactive-split histogram figure is present but marks the size histogram unavailable while retaining aggregate `memory_stats` inactive-split bytes.
+- 2026-05-26T04:50:15Z - Run launched: CoLA + DistOpt submitted as PBS job `7171652.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_cola_distopt.log`, snapshots `raw/memlive_3b_cola_distopt/`.
+- 2026-05-26T04:50:22Z - CoLA + DistOpt job `7171652` is running on debug node `x3110c0s13b1n0`.
+- 2026-05-26T04:51:04Z - Run completed: CoLA + DistOpt job `7171652.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` finished with PBS `Exit_status=0`.
+- 2026-05-26T04:52:00Z - Snapshot parsed: verified CoLA + DistOpt rank-0 snapshot artifacts are present and `status=ok` for `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T04:53:00Z - Metric extracted: CoLA + DistOpt steady-state row reports active allocated 11.644 GB, inactive split 0.495 GB, reserved inactive 6.030 GB, reserved 17.674 GB, allocated 11.644 GB, active block count 216, inactive split block count 0.
+- 2026-05-26T04:53:00Z - Conclusion updated: DistOpt steady-state comparison shows CoLA active allocated reduction of 15.099 GB versus FullRank, inactive split change of +0.022 GB, and conclusion `CoLA increases fragmentation? no`.
+- 2026-05-26T04:53:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with both DistOpt rows.
+- 2026-05-26T04:52:48Z - Run launched: FullRank + DistOpt+offload submitted as PBS job `7171658.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_fullrank_distopt_offload.log`, snapshots `raw/memlive_3b_fullrank_distopt_offload/`.
+- 2026-05-26T04:52:54Z - FullRank + DistOpt+offload job `7171658` is running on debug node `x3110c0s13b0n0`.
+- 2026-05-26T04:54:21Z - Run completed: FullRank + DistOpt+offload job `7171658.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` finished with PBS `Exit_status=0`.
+- 2026-05-26T04:55:00Z - Snapshot parsed: verified FullRank + DistOpt+offload rank-0 snapshot artifacts are present and `status=ok` for `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T04:55:00Z - Metric extracted: FullRank + DistOpt+offload steady-state row reports active allocated 17.842 GB, inactive split 0.107 GB, reserved inactive 6.574 GB, reserved 24.416 GB, allocated 17.842 GB, active block count 17, inactive split block count 0.
+- 2026-05-26T04:55:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with FullRank + DistOpt+offload included.
+- 2026-05-26T04:55:27Z - Run launched: CoLA + DistOpt+offload submitted as PBS job `7171664.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_cola_distopt_offload.log`, snapshots `raw/memlive_3b_cola_distopt_offload/`.
+- 2026-05-26T04:55:34Z - CoLA + DistOpt+offload job `7171664` is running on debug node `x3110c0s13b1n0`.
+- 2026-05-26T04:56:32Z - Run completed: CoLA + DistOpt+offload job `7171664.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` finished with PBS `Exit_status=0`.
+- 2026-05-26T04:57:00Z - Snapshot parsed: verified CoLA + DistOpt+offload rank-0 snapshot artifacts are present and `status=ok` for `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T04:57:00Z - Metric extracted: CoLA + DistOpt+offload steady-state row reports active allocated 7.783 GB, inactive split 0.254 GB, reserved inactive 6.045 GB, reserved 13.828 GB, allocated 7.783 GB, active block count 17, inactive split block count 0.
+- 2026-05-26T04:57:00Z - Conclusion updated: DistOpt+offload steady-state comparison shows CoLA active allocated reduction of 10.059 GB versus FullRank, inactive split change of +0.147 GB, and conclusion `CoLA increases fragmentation? no`.
+- 2026-05-26T04:57:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with both DistOpt+offload rows.
+- 2026-05-26T04:58:37Z - Run launched: FullRank + FSDP submitted as PBS job `7171669.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_fullrank_fsdp.log`, snapshots `raw/memlive_3b_fullrank_fsdp/`.
+- 2026-05-26T04:58:40Z - FullRank + FSDP job `7171669` is running on debug node `x3110c0s13b0n0`.
+- 2026-05-26T04:59:16Z - Run failed: FullRank + FSDP job `7171669.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` exited with PBS `Exit_status=1`.
+- 2026-05-26T05:00:00Z - Failure diagnosed: FullRank + FSDP failed during first `optimizer.step()` with CUDA illegal memory access / NCCL watchdog abort; torchrun reported `ChildFailedError` with rank 2 exit `-6`. Evidence: `logs/memlive_3b_fullrank_fsdp.log` lines around the first tracebacks and PBS stdout `mem_liveness.o7171669`.
+- 2026-05-26T05:00:00Z - Snapshot parsed: failed FullRank + FSDP full row produced only `post_init` and first `post_backward` snapshots; missing `post_optimizer_step` and `steady_state_after_iter_10`, so it is not a valid measured row.
+- 2026-05-26T05:00:00Z - Retry decision: retry FullRank + FSDP with a reduced 3B-width 4-layer fallback using `RUN_ID_SUFFIX=fsdp_4layer`; added `RUN_ID_SUFFIX` support to `run_one_memory_liveness_polaris.pbs` to avoid overwriting full-row artifacts.
+- 2026-05-26T05:03:09Z - Run launched: FullRank + FSDP 3B-width 4-layer fallback submitted as PBS job `7171676.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_fullrank_fsdp_fsdp_4layer.log`, snapshots `raw/memlive_3b_fullrank_fsdp_fsdp_4layer/`.
+- 2026-05-26T05:03:12Z - FullRank + FSDP fallback job `7171676` is running on debug node `x3110c0s37b0n0`.
+- 2026-05-26T05:04:05Z - Run failed: FullRank + FSDP 3B-width 4-layer fallback job `7171676.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` exited with PBS `Exit_status=1`.
+- 2026-05-26T05:05:00Z - Failure diagnosed: FSDP fallback failed with the same CUDA illegal memory access during first `optimizer.step()` / NCCL watchdog abort; torchrun reported rank 1 exit `-6`. Evidence: `logs/memlive_3b_fullrank_fsdp_fsdp_4layer.log` and PBS stdout `mem_liveness.o7171676`.
+- 2026-05-26T05:05:00Z - Snapshot parsed: FSDP fallback produced only `post_init` and first `post_backward`; missing `post_optimizer_step` and `steady_state_after_iter_10`, so FullRank + FSDP is marked failed, not measured.
+- 2026-05-26T05:05:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with the partial failed FSDP snapshots present as evidence.
+- 2026-05-26T05:06:05Z - Run launched: CoLA + FSDP submitted as PBS job `7171683.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_cola_fsdp.log`, snapshots `raw/memlive_3b_cola_fsdp/`.
+- 2026-05-26T05:06:10Z - CoLA + FSDP job `7171683` is running on debug node `x3207c0s1b1n0`.
+- 2026-05-26T05:07:11Z - Run failed: CoLA + FSDP job `7171683.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` exited with PBS `Exit_status=1`.
+- 2026-05-26T05:08:00Z - Failure diagnosed: CoLA + FSDP failed during first `optimizer.step()` with CUDA illegal memory access / NCCL watchdog abort; torchrun reported `ChildFailedError` with rank 1 exit `-6`. Evidence: `logs/memlive_3b_cola_fsdp.log` lines around the first traceback and PBS history for job `7171683`.
+- 2026-05-26T05:08:00Z - Snapshot parsed: failed CoLA + FSDP full row produced only `post_init` and first `post_backward` snapshots; missing `post_optimizer_step` and `steady_state_after_iter_10`, so it is not a valid measured row.
+- 2026-05-26T05:08:00Z - Retry decision: retry CoLA + FSDP with a reduced 3B-width 4-layer fallback using `RUN_ID_SUFFIX=fsdp_4layer`, matching the FullRank + FSDP fallback policy.
+- 2026-05-26T05:09:21Z - Run launched: CoLA + FSDP 3B-width 4-layer fallback submitted as PBS job `7171686.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_cola_fsdp_fsdp_4layer.log`, snapshots `raw/memlive_3b_cola_fsdp_fsdp_4layer/`.
+- 2026-05-26T05:09:26Z - CoLA + FSDP fallback job `7171686` is running on debug node `x3207c0s1b1n0`.
+- 2026-05-26T05:09:54Z - Run failed: CoLA + FSDP 3B-width 4-layer fallback job `7171686.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` exited with PBS `Exit_status=1`.
+- 2026-05-26T05:10:00Z - Failure diagnosed: CoLA + FSDP fallback failed with the same CUDA illegal memory access during first `optimizer.step()` / NCCL watchdog abort; torchrun reported rank 1 exit `-6`. Evidence: `logs/memlive_3b_cola_fsdp_fsdp_4layer.log` and PBS stdout `mem_liveness.o7171686`.
+- 2026-05-26T05:10:00Z - Snapshot parsed: CoLA + FSDP fallback produced only `post_init` and first `post_backward`; missing `post_optimizer_step` and `steady_state_after_iter_10`, so CoLA + FSDP is marked failed, not measured.
+- 2026-05-26T05:11:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with the CoLA + FSDP partial failed snapshots present as evidence.
+- 2026-05-26T05:11:00Z - Run launched: FullRank + FSDP+offload submitted as PBS job `7171687.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_fullrank_fsdp_offload.log`, snapshots `raw/memlive_3b_fullrank_fsdp_offload/`.
+- 2026-05-26T05:11:07Z - FullRank + FSDP+offload job `7171687` is running on debug node `x3207c0s1b1n0`.
+- 2026-05-26T05:12:04Z - Run completed: FullRank + FSDP+offload job `7171687.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` finished with PBS `Exit_status=0`.
+- 2026-05-26T05:12:00Z - Snapshot parsed: verified FullRank + FSDP+offload rank-0 snapshot artifacts are present and `status=ok` for `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T05:12:00Z - Metric extracted: FullRank + FSDP+offload steady-state row reports active allocated 9.028 GB, inactive split 0.317 GB, reserved inactive 16.470 GB, reserved 25.498 GB, allocated 9.028 GB, active block count 72, inactive split block count 0.
+- 2026-05-26T05:12:00Z - Table/figure generated: parser regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with FullRank + FSDP+offload included.
+- 2026-05-26T05:13:00Z - Run launched: CoLA + FSDP+offload submitted as PBS job `7171689.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`; expected log `logs/memlive_3b_cola_fsdp_offload.log`, snapshots `raw/memlive_3b_cola_fsdp_offload/`.
+- 2026-05-26T05:13:18Z - CoLA + FSDP+offload job `7171689` is running on debug node `x3110c0s13b1n0`.
+- 2026-05-26T05:14:12Z - Run completed: CoLA + FSDP+offload job `7171689.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov` finished with PBS `Exit_status=0`.
+- 2026-05-26T05:14:00Z - Snapshot parsed: verified CoLA + FSDP+offload rank-0 snapshot artifacts are present and `status=ok` for `post_init`, `post_backward`, `post_optimizer_step`, and `steady_state_after_iter_10`.
+- 2026-05-26T05:14:00Z - Metric extracted: CoLA + FSDP+offload steady-state row reports active allocated 4.695 GB, inactive split 0.270 GB, reserved inactive 10.374 GB, reserved 15.068 GB, allocated 4.695 GB, active block count 78, inactive split block count 0.
+- 2026-05-26T05:14:00Z - Conclusion updated: FSDP+offload steady-state comparison shows CoLA active allocated reduction of 4.334 GB versus FullRank, inactive split change of -0.047 GB, and conclusion `CoLA increases fragmentation? no`.
+- 2026-05-26T05:14:00Z - Table/figure generated: final parser pass regenerated `parsed/*.csv`, `parsed/*.json`, `REPORT.md`, and figures with all eight requested rows either measured or failed with evidence.
+- 2026-05-26T05:15:00Z - Conclusion updated: `REPORT.md` interpretation now answers the core questions explicitly: CoLA does not increase DistOpt allocator fragmentation; CoLA reduces active live memory; DistOpt offload shows no meaningful steady-state GPU reserved overhead; FSDP-only failed before optimizer-step/steady-state; FSDP+offload increases reserved headroom/cache without increasing inactive-split fragmentation.

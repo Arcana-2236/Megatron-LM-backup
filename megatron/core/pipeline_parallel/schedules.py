@@ -219,6 +219,31 @@ def custom_backward(output, grad_output):
     )
 
 
+def deepspeed_backward(output, grad_output, config):
+    """Run backward through DeepSpeed when the runtime owns optimizer state."""
+
+    if not getattr(config, "deepspeed_owns_backward", False):
+        return False
+
+    engine = getattr(config, "deepspeed_engine", None)
+    if engine is None:
+        raise RuntimeError(
+            "Transformer config requests DeepSpeed-owned backward, but no "
+            "DeepSpeed engine is attached to the config."
+        )
+    if grad_output is not None:
+        raise RuntimeError(
+            "DeepSpeed-owned backward currently requires the last-stage scalar "
+            "loss path. Pipeline-stage output gradients still require the "
+            "Megatron autograd path."
+        )
+
+    # Megatron's loss function has already divided by the number of
+    # microbatches, so ask DeepSpeed not to apply GAS scaling a second time.
+    engine.backward(output, scale_wrt_gas=False)
+    return True
+
+
 def get_tensor_device(tensor: Union[torch.Tensor, Dict[str, torch.Tensor]]):
     """Get the device of a tensor or a dictionary of tensors."""
     if isinstance(tensor, dict):
@@ -496,7 +521,9 @@ def backward_step(input_tensor, output_tensor, output_tensor_grad, config):
     # This results in a tensor that does not require gradients.
     # In such cases, we intentionally skip the backward pass while preserving zero gradients.
     if output_tensor[0].requires_grad:
-        if config.deallocate_pipeline_outputs:
+        if deepspeed_backward(output_tensor[0], output_tensor_grad[0], config):
+            pass
+        elif config.deallocate_pipeline_outputs:
             custom_backward(output_tensor[0], output_tensor_grad[0])
         else:
             torch.autograd.backward(output_tensor[0], grad_tensors=output_tensor_grad[0])

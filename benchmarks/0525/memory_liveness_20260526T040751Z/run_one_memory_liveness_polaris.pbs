@@ -1,0 +1,74 @@
+#!/bin/bash -l
+#PBS -N mem_liveness
+#PBS -A TensorCompress
+#PBS -q debug
+#PBS -l select=1:ncpus=64:ngpus=4
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -j oe
+
+set -euo pipefail
+
+module use /soft/modulefiles
+module load conda cudatoolkit-standalone/12.4.1
+set +u
+conda activate dspeed_env
+set -u
+
+ROOT_DIR=${ROOT_DIR:-/home/$USER/offloading/ATC-Megatron}
+RESULT_DIR=${RESULT_DIR:-$ROOT_DIR/benchmarks/0525/memory_liveness_20260526T040751Z}
+cd "$ROOT_DIR"
+
+export TMPDIR=${TMPDIR:-/var/tmp/pbs.${PBS_JOBID}}
+export RESULTS_ROOT="$RESULT_DIR"
+export MODEL_SIZE=${MODEL_SIZE:-3b}
+export MODEL_IMPL=${MODEL_IMPL:?MODEL_IMPL must be baseline or cola}
+export STRATEGY=${STRATEGY:?STRATEGY must be distopt or fsdp}
+export OFFLOAD=${OFFLOAD:-0}
+export CUDA_GRAPH=0
+export TRAIN_ITERS=${TRAIN_ITERS:-12}
+export LR_WARMUP_ITERS=${LR_WARMUP_ITERS:-1}
+export RUN_TIMEOUT_SECONDS=${RUN_TIMEOUT_SECONDS:-2400}
+export GPUS_PER_NODE=4
+export NNODES=1
+export NODE_RANK=0
+export MASTER_ADDR=$(head -n 1 "$PBS_NODEFILE")
+export MASTER_PORT=${MASTER_PORT:-$((10000 + RANDOM % 50000))}
+export PYTHON=${PYTHON:-$(which python)}
+
+export MEMORY_SNAPSHOT_PHASES=1
+export MEMORY_SNAPSHOT_RECORD_HISTORY=${MEMORY_SNAPSHOT_RECORD_HISTORY:-1}
+export MEMORY_SNAPSHOT_MAX_HISTORY=${MEMORY_SNAPSHOT_MAX_HISTORY:-200000}
+export MEMORY_SNAPSHOT_RANKS=${MEMORY_SNAPSHOT_RANKS:-0}
+
+case "${MODEL_IMPL}_${STRATEGY}_offload${OFFLOAD}" in
+  baseline_distopt_offload0) export RUN_ID=memlive_3b_fullrank_distopt ;;
+  cola_distopt_offload0) export RUN_ID=memlive_3b_cola_distopt ;;
+  baseline_distopt_offload1) export RUN_ID=memlive_3b_fullrank_distopt_offload ;;
+  cola_distopt_offload1) export RUN_ID=memlive_3b_cola_distopt_offload ;;
+  baseline_fsdp_offload0) export RUN_ID=memlive_3b_fullrank_fsdp ;;
+  cola_fsdp_offload0) export RUN_ID=memlive_3b_cola_fsdp ;;
+  baseline_fsdp_offload1) export RUN_ID=memlive_3b_fullrank_fsdp_offload ;;
+  cola_fsdp_offload1) export RUN_ID=memlive_3b_cola_fsdp_offload ;;
+  *)
+    echo "Unsupported row MODEL_IMPL=$MODEL_IMPL STRATEGY=$STRATEGY OFFLOAD=$OFFLOAD" >&2
+    exit 2
+    ;;
+esac
+if [ -n "${RUN_ID_SUFFIX:-}" ]; then
+  export RUN_ID="${RUN_ID}_${RUN_ID_SUFFIX}"
+fi
+
+export MEMORY_SNAPSHOT_DIR="$RESULT_DIR/raw/$RUN_ID"
+mkdir -p "$TMPDIR" "$RESULT_DIR/logs" "$RESULT_DIR/meta" "$MEMORY_SNAPSHOT_DIR"
+
+echo "PBS_JOBID=$PBS_JOBID"
+echo "ROOT_DIR=$ROOT_DIR"
+echo "RESULT_DIR=$RESULT_DIR"
+echo "RUN_ID=$RUN_ID"
+echo "MODEL_IMPL=$MODEL_IMPL STRATEGY=$STRATEGY OFFLOAD=$OFFLOAD CUDA_GRAPH=$CUDA_GRAPH"
+echo "MEMORY_SNAPSHOT_DIR=$MEMORY_SNAPSHOT_DIR"
+echo "MEMORY_SNAPSHOT_RANKS=$MEMORY_SNAPSHOT_RANKS"
+cat "$PBS_NODEFILE"
+
+bash benchmarks/cola_memory/run_one.sh

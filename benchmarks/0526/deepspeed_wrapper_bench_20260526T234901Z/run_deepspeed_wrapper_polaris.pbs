@@ -1,0 +1,320 @@
+#!/bin/bash -l
+#PBS -N ds_wrapper_bench
+#PBS -A TensorCompress
+#PBS -q debug
+#PBS -l select=1:ncpus=64:ngpus=4
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -j oe
+
+set -euo pipefail
+
+module use /soft/modulefiles
+module load conda cudatoolkit-standalone/12.4.1
+set +u
+conda activate dspeed_env
+set -u
+
+ROOT_DIR=${ROOT_DIR:-/home/$USER/offloading/ATC-Megatron}
+cd "$ROOT_DIR"
+ulimit -c 0 || true
+
+STUDY_DIR="$ROOT_DIR/benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z"
+EAGLE_PROJECT_DIR=${EAGLE_PROJECT_DIR:-/eagle/TensorCompress/$USER}
+if [ -d "$EAGLE_PROJECT_DIR" ] && [ -w "$EAGLE_PROJECT_DIR" ]; then
+  RESULTS_ROOT=${RESULTS_ROOT:-$EAGLE_PROJECT_DIR/atc_deepspeed_wrapper/${PBS_JOBID}}
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-$EAGLE_PROJECT_DIR/cache/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$EAGLE_PROJECT_DIR/cache/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$EAGLE_PROJECT_DIR/cache/torch_extensions}
+else
+  RESULTS_ROOT=${RESULTS_ROOT:-$STUDY_DIR/results/${PBS_JOBID}}
+  export PIP_CACHE_DIR=${PIP_CACHE_DIR:-$STUDY_DIR/cache/pip}
+  export UV_CACHE_DIR=${UV_CACHE_DIR:-$STUDY_DIR/cache/uv}
+  export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-$STUDY_DIR/cache/torch_extensions}
+fi
+export RESULTS_ROOT
+
+export TMPDIR=${TMPDIR:-/var/tmp/pbs.${PBS_JOBID}}
+mkdir -p "$TMPDIR" "$PIP_CACHE_DIR" "$UV_CACHE_DIR" "$TORCH_EXTENSIONS_DIR"
+mkdir -p "$RESULTS_ROOT/logs" "$RESULTS_ROOT/meta" "$RESULTS_ROOT/configs"
+
+export NNODES=$(awk '!seen[$0]++' "$PBS_NODEFILE" | wc -l)
+export GPUS_PER_NODE=4
+export MASTER_ADDR=$(head -n 1 "$PBS_NODEFILE")
+export MASTER_PORT_BASE=${MASTER_PORT_BASE:-$((10000 + RANDOM % 40000))}
+export PYTHON=${PYTHON:-$(which python)}
+export RUN_TIMEOUT_SECONDS=${RUN_TIMEOUT_SECONDS:-900}
+export TRAIN_ITERS=${TRAIN_ITERS:-20}
+export WARMUP_ITERS=${WARMUP_ITERS:-5}
+export MODEL_SIZE=${MODEL_SIZE:-3b}
+export DEEPSPEED_WRAPPER_MODE=${DEEPSPEED_WRAPPER_MODE:-model}
+export DEEPSPEED_ZERO_STAGE=${DEEPSPEED_ZERO_STAGE:-2}
+
+echo "PBS_JOBID=$PBS_JOBID"
+echo "ROOT_DIR=$ROOT_DIR"
+echo "STUDY_DIR=$STUDY_DIR"
+echo "RESULTS_ROOT=$RESULTS_ROOT"
+echo "DEEPSPEED_WRAPPER_MODE=$DEEPSPEED_WRAPPER_MODE"
+echo "DEEPSPEED_ZERO_STAGE=$DEEPSPEED_ZERO_STAGE"
+echo "NNODES=$NNODES GPUS_PER_NODE=$GPUS_PER_NODE MASTER_ADDR=$MASTER_ADDR MASTER_PORT_BASE=$MASTER_PORT_BASE"
+cat "$PBS_NODEFILE"
+
+case "$MODEL_SIZE" in
+  3b)
+    NUM_LAYERS=${NUM_LAYERS:-24}
+    HIDDEN_SIZE=${HIDDEN_SIZE:-3200}
+    FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-8640}
+    NUM_HEADS=${NUM_HEADS:-32}
+    SEQ_LENGTH=${SEQ_LENGTH:-1024}
+    GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4}
+    ;;
+  3b4l)
+    NUM_LAYERS=${NUM_LAYERS:-4}
+    HIDDEN_SIZE=${HIDDEN_SIZE:-3200}
+    FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-8640}
+    NUM_HEADS=${NUM_HEADS:-32}
+    SEQ_LENGTH=${SEQ_LENGTH:-1024}
+    GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4}
+    ;;
+  *)
+    echo "Unsupported MODEL_SIZE=$MODEL_SIZE" >&2
+    exit 2
+    ;;
+esac
+
+MLP_RANK=${MLP_RANK:-$((HIDDEN_SIZE / 4))}
+ATTN_RANK=${ATTN_RANK:-$((HIDDEN_SIZE / 4))}
+MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:-1}
+
+write_ds_config() {
+  local config_path=$1
+  local offload=$2
+  if [ "$offload" = "1" ]; then
+    cat > "$config_path" <<JSON
+{
+  "train_micro_batch_size_per_gpu": $MICRO_BATCH_SIZE,
+  "gradient_accumulation_steps": 1,
+  "train_batch_size": $GLOBAL_BATCH_SIZE,
+  "gradient_clipping": 1.0,
+  "zero_optimization": {
+    "stage": $DEEPSPEED_ZERO_STAGE,
+    "contiguous_gradients": true,
+    "overlap_comm": false,
+    "offload_optimizer": {
+      "device": "cpu",
+      "pin_memory": true
+    }
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "params": {
+      "lr": 3e-4,
+      "betas": [0.9, 0.95],
+      "eps": 1e-8,
+      "weight_decay": 0.1
+    }
+  },
+  "bf16": {
+    "enabled": true
+  }
+}
+JSON
+  else
+    cat > "$config_path" <<JSON
+{
+  "train_micro_batch_size_per_gpu": $MICRO_BATCH_SIZE,
+  "gradient_accumulation_steps": 1,
+  "train_batch_size": $GLOBAL_BATCH_SIZE,
+  "gradient_clipping": 1.0,
+  "zero_optimization": {
+    "stage": $DEEPSPEED_ZERO_STAGE,
+    "contiguous_gradients": true,
+    "overlap_comm": false
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "params": {
+      "lr": 3e-4,
+      "betas": [0.9, 0.95],
+      "eps": 1e-8,
+      "weight_decay": 0.1
+    }
+  },
+  "bf16": {
+    "enabled": true
+  }
+}
+JSON
+  fi
+}
+
+run_row() {
+  local row_name=$1
+  local model_impl=$2
+  local offload=$3
+  local cuda_graph=$4
+  local row_index=$5
+
+  local run_id
+  run_id="$(date -u +%Y%m%dT%H%M%SZ)_${MODEL_SIZE}_${model_impl}_deepspeed_wrapper_${DEEPSPEED_WRAPPER_MODE}_zero${DEEPSPEED_ZERO_STAGE}_offload${offload}_cg${cuda_graph}"
+  local log_file="$RESULTS_ROOT/logs/${run_id}.log"
+  local meta_file="$RESULTS_ROOT/meta/${run_id}.json"
+  local cmd_file="$RESULTS_ROOT/meta/${run_id}.cmd"
+  local ds_config="$RESULTS_ROOT/configs/${run_id}_ds_config.json"
+  local master_port=$((MASTER_PORT_BASE + row_index))
+
+  local deepspeed_args=(--deepspeed --deepspeed-wrapper-mode "$DEEPSPEED_WRAPPER_MODE")
+  local runtime_args=()
+  if [ "$DEEPSPEED_WRAPPER_MODE" = "optimizer" ]; then
+    write_ds_config "$ds_config" "$offload"
+    deepspeed_args+=(--deepspeed_config "$ds_config")
+  elif [ "$DEEPSPEED_WRAPPER_MODE" = "model" ]; then
+    if [ "$offload" = "1" ]; then
+      runtime_args+=(
+        --use-distributed-optimizer
+        --optimizer-cpu-offload
+        --optimizer-offload-fraction 1.0
+        --use-precision-aware-optimizer
+      )
+    fi
+  else
+    echo "Unsupported DEEPSPEED_WRAPPER_MODE=$DEEPSPEED_WRAPPER_MODE" >&2
+    exit 2
+  fi
+
+  local timing_args=()
+  if [ "$cuda_graph" = "0" ]; then
+    timing_args=(--timing-log-level 1 --timing-log-option minmax)
+  fi
+
+  local cuda_graph_args=()
+  if [ "$cuda_graph" = "1" ]; then
+    cuda_graph_args=(
+      --cuda-graph-impl "${CUDA_GRAPH_IMPL:-full_iteration}"
+      --no-check-for-nan-in-loss-and-grad
+    )
+  fi
+
+  local cmd=(
+    "$PYTHON" -m torch.distributed.run
+    --nnodes "$NNODES"
+    --nproc-per-node "$GPUS_PER_NODE"
+    --node-rank 0
+    --master-addr "$MASTER_ADDR"
+    --master-port "$master_port"
+    pretrain_gpt_deepspeed.py
+    "${deepspeed_args[@]}"
+    --model-impl "$model_impl"
+    --transformer-impl local
+    --tensor-model-parallel-size 1
+    --pipeline-model-parallel-size 1
+    --num-layers "$NUM_LAYERS"
+    --hidden-size "$HIDDEN_SIZE"
+    --ffn-hidden-size "$FFN_HIDDEN_SIZE"
+    --mlp-rank "$MLP_RANK"
+    --attn-rank "$ATTN_RANK"
+    --num-attention-heads "$NUM_HEADS"
+    --micro-batch-size "$MICRO_BATCH_SIZE"
+    --global-batch-size "$GLOBAL_BATCH_SIZE"
+    --seq-length "$SEQ_LENGTH"
+    --max-position-embeddings "$SEQ_LENGTH"
+    --train-iters "$TRAIN_ITERS"
+    --lr-warmup-iters 1
+    --lr 3e-4
+    --lr-decay-style cosine
+    --min-lr 3e-5
+    --weight-decay 0.1
+    --clip-grad 1
+    --optimizer adam
+    --adam-beta1 0.9
+    --adam-beta2 0.95
+    --log-interval 1
+    --log-memory-interval 1
+    --save-interval 100000
+    --eval-interval 100000
+    --eval-iters 0
+    --bf16
+    --mock-data
+    --tokenizer-type NullTokenizer
+    --vocab-size 31980
+    --split 1000,0,0
+    --distributed-backend nccl
+    --attention-dropout 0
+    --hidden-dropout 0
+    --position-embedding-type rope
+    --no-rope-fusion
+    --no-persist-layer-norm
+    --untie-embeddings-and-output-weights
+    --swiglu
+    --normalization RMSNorm
+    --disable-bias-linear
+    "${runtime_args[@]}"
+    "${timing_args[@]}"
+    "${cuda_graph_args[@]}"
+  )
+
+  cat > "$meta_file" <<JSON
+{
+  "row": "$row_name",
+  "run_id": "$run_id",
+  "model_size": "$MODEL_SIZE",
+  "model_impl": "$model_impl",
+  "strategy": "deepspeed_wrapper_${DEEPSPEED_WRAPPER_MODE}",
+  "deepspeed_wrapper_mode": "$DEEPSPEED_WRAPPER_MODE",
+  "offload": "$offload",
+  "cuda_graph": "$cuda_graph",
+  "train_iters": "$TRAIN_ITERS",
+  "warmup_iters": "$WARMUP_ITERS",
+  "gpus_per_node": "$GPUS_PER_NODE",
+  "nnodes": "$NNODES",
+  "hidden_size": "$HIDDEN_SIZE",
+  "ffn_hidden_size": "$FFN_HIDDEN_SIZE",
+  "num_layers": "$NUM_LAYERS",
+  "num_heads": "$NUM_HEADS",
+  "seq_length": "$SEQ_LENGTH",
+  "mlp_rank": "$MLP_RANK",
+  "attn_rank": "$ATTN_RANK",
+  "deepspeed_config": "$ds_config",
+  "log_file": "$log_file"
+}
+JSON
+  printf '%q ' "${cmd[@]}" > "$cmd_file"
+  printf '\n' >> "$cmd_file"
+
+  echo "RUN_ROW=$row_name"
+  echo "RUN_ID=$run_id"
+  echo "LOG_FILE=$log_file"
+  echo "META_FILE=$meta_file"
+  echo "CMD_FILE=$cmd_file"
+
+  set +e
+  timeout --kill-after=30s "$RUN_TIMEOUT_SECONDS" "${cmd[@]}" > "$log_file" 2>&1
+  local status=$?
+  set -e
+  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+    echo "RUN_TIMEOUT after ${RUN_TIMEOUT_SECONDS}s" >> "$log_file"
+    echo "RUN_TIMEOUT after ${RUN_TIMEOUT_SECONDS}s"
+  fi
+  echo "ROW_EXIT_STATUS=$status"
+  return 0
+}
+
+row=0
+if [ "${RUN_NOGRAPH:-1}" = "1" ]; then
+  if [ "${RUN_OFFLOAD_ONLY:-0}" != "1" ]; then
+    run_row "FullRank DeepSpeed optimizer-owned" baseline 0 0 "$row"; row=$((row + 1))
+    run_row "CoLA DeepSpeed optimizer-owned" cola 0 0 "$row"; row=$((row + 1))
+  fi
+  run_row "FullRank DeepSpeed optimizer-owned + ZeRO optimizer offload" baseline 1 0 "$row"; row=$((row + 1))
+  run_row "CoLA DeepSpeed optimizer-owned + ZeRO optimizer offload" cola 1 0 "$row"; row=$((row + 1))
+fi
+if [ "${RUN_CUDAGRAPH:-1}" = "1" ]; then
+  if [ "${RUN_OFFLOAD_ONLY:-0}" != "1" ]; then
+    run_row "FullRank DeepSpeed optimizer-owned + CUDA Graph" baseline 0 1 "$row"; row=$((row + 1))
+    run_row "CoLA DeepSpeed optimizer-owned + CUDA Graph" cola 0 1 "$row"; row=$((row + 1))
+  fi
+  run_row "FullRank DeepSpeed optimizer-owned + ZeRO optimizer offload + CUDA Graph" baseline 1 1 "$row"; row=$((row + 1))
+  run_row "CoLA DeepSpeed optimizer-owned + ZeRO optimizer offload + CUDA Graph" cola 1 1 "$row"; row=$((row + 1))
+fi
+
+"$PYTHON" "$STUDY_DIR/parse_deepspeed_wrapper_results.py" --results-root "$RESULTS_ROOT"
