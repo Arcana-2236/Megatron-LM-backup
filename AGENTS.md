@@ -25,10 +25,12 @@ artifacts.
 
 - For each day of meaningful work, create or reuse a dated subdirectory under
   `progress/`, such as `progress/YYYY-MM-DD/`.
-- Record that day's work in the dated directory, including the task, assumptions,
-  commands run, results/status, blockers, and next steps.
+- For each distinct goal, create or reuse one goal-specific subdirectory under
+  that date, such as `progress/YYYY-MM-DD/Goal1_Smoketest/`.
+- Record that goal's work in its goal directory, including the task,
+  assumptions, commands run, results/status, blockers, and next steps.
 - Put related logs, parsed results, benchmark outputs, and other generated
-  artifacts under the same dated directory when practical. Use subdirectories
+  artifacts under the same goal directory when practical. Use subdirectories
   such as `logs/`, `results/`, or `artifacts/` if that keeps the record clearer.
 - Keep progress records concise but sufficient for another agent or engineer to
   resume the work without reconstructing context from shell history.
