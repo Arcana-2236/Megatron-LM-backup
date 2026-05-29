@@ -158,6 +158,20 @@ class TransformerConfig(ModelParallelConfig):
     """Transformer Feed-Forward Network hidden size. This is set to 4*hidden_size
     if not provided."""
 
+    use_cola: bool = False
+    """Enable the initial CoLA bottleneck linear factorization for GPT attention and MLP."""
+
+    cola_mlp_rank: Optional[int] = None
+    """Bottleneck rank for CoLA MLP projections. Defaults to hidden_size // 4."""
+
+    cola_attn_rank: Optional[int] = None
+    """Bottleneck rank for CoLA self-attention projections. Defaults to hidden_size // 4."""
+
+    cola_linear_placement_pattern: Literal[
+        "column_gather-column_shard-row-column_gather"
+    ] = "column_gather-column_shard-row-column_gather"
+    """CoLA linear placement pattern for the initial TP=1 port."""
+
     kv_channels: Optional[int] = None
     """Projection weights dimension in multi-head attention. This is set to hidden_size //
     num_attention_heads if not provided."""
@@ -1201,6 +1215,28 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.num_query_groups is None:
             self.num_query_groups = self.num_attention_heads
+
+        if self.use_cola:
+            if self.tensor_model_parallel_size != 1:
+                raise ValueError("Initial CoLA support requires tensor_model_parallel_size=1.")
+            if not self.gated_linear_unit:
+                raise ValueError("Initial CoLA support requires gated_linear_unit=True.")
+            if self.cola_mlp_rank is None:
+                self.cola_mlp_rank = self.hidden_size // 4
+            if self.cola_attn_rank is None:
+                self.cola_attn_rank = self.hidden_size // 4
+            if self.cola_mlp_rank <= 0:
+                raise ValueError(f"cola_mlp_rank must be positive, got {self.cola_mlp_rank}.")
+            if self.cola_attn_rank <= 0:
+                raise ValueError(f"cola_attn_rank must be positive, got {self.cola_attn_rank}.")
+            if (
+                self.cola_linear_placement_pattern
+                != "column_gather-column_shard-row-column_gather"
+            ):
+                raise NotImplementedError(
+                    "Initial CoLA support only implements "
+                    "column_gather-column_shard-row-column_gather."
+                )
 
         if (
             self.num_query_groups % self.tensor_model_parallel_size != 0

@@ -1,16 +1,16 @@
 # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 from megatron.core.models.gpt import GPTModel
-from megatron.core.models.gpt.gpt_layer_specs import (
-    get_gpt_decoder_block_spec,
-    get_gpt_layer_local_spec,
-    get_gpt_layer_with_transformer_engine_spec,
-    get_gpt_layer_with_inference_spec,
-    get_gpt_mtp_block_spec,
-    get_gpt_decoder_layer_specs,
-)
 from megatron.core.models.gpt.experimental_attention_variant_module_specs import (
     get_transformer_block_with_experimental_attention_variant_spec,
+)
+from megatron.core.models.gpt.gpt_layer_specs import (
+    get_gpt_decoder_block_spec,
+    get_gpt_decoder_layer_specs,
+    get_gpt_layer_local_spec,
+    get_gpt_layer_with_inference_spec,
+    get_gpt_layer_with_transformer_engine_spec,
+    get_gpt_mtp_block_spec,
 )
 from megatron.core.models.gpt.heterogeneous.heterogeneous_layer_specs import (
     get_gpt_heterogeneous_layer_spec,
@@ -28,6 +28,8 @@ def gpt_builder(args, pre_process, post_process, vp_stage=None, config=None, pg_
             config = core_transformer_config_from_yaml(args, "language_model")
         else:
             config = core_transformer_config_from_args(args)
+    if config.use_cola and args.num_experts:
+        raise NotImplementedError("Initial CoLA support does not cover MoE experts.")
     if args.spec is not None:
         transformer_layer_spec = import_module(args.spec)
     else:
@@ -111,6 +113,8 @@ def _get_transformer_layer_spec(use_te, config):
         transformer_layer_spec: The transformer layer specification
     """
     if use_te:
+        if config.use_cola:
+            raise NotImplementedError("Initial CoLA support is only wired for local transformer layers.")
         return get_gpt_layer_with_transformer_engine_spec(
             config.num_moe_experts,
             config.moe_grouped_gemm,
@@ -126,6 +130,8 @@ def _get_transformer_layer_spec(use_te, config):
             use_grouped_gemm_for_dense_mlp=config.use_grouped_gemm_for_dense_mlp,
         )
     elif config.transformer_impl == "inference_optimized":
+        if config.use_cola:
+            raise NotImplementedError("Initial CoLA support is only wired for local transformer layers.")
         return get_gpt_layer_with_inference_spec(
             config.qk_layernorm,
             config.multi_latent_attention,
@@ -142,4 +148,5 @@ def _get_transformer_layer_spec(use_te, config):
             use_kitchen=config.use_kitchen,
             use_kitchen_attention=config.use_kitchen_attention,
             kitchen_attention_backend=config.kitchen_attention_backend,
+            use_cola=config.use_cola,
         )

@@ -12,6 +12,12 @@ from megatron.core.models.backends import (
 )
 from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_backend
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
+from megatron.core.transformer.cola import (
+    CoLAAttentionOutputLinear,
+    CoLAFC1Linear,
+    CoLAQKVLinear,
+    CoLARowThenColumnLinear,
+)
 from megatron.core.transformer.enums import AttnMaskType, LayerType
 from megatron.core.transformer.identity_op import IdentityOp
 from megatron.core.transformer.mlp import MLP, MLPSubmodules
@@ -367,6 +373,7 @@ def get_gpt_layer_local_submodules(
     use_kitchen: bool = False,
     use_kitchen_attention: bool = False,
     kitchen_attention_backend: str = "sdpa",
+    use_cola: bool = False,
 ) -> TransformerLayerSubmodules:
     """Use these submodules for an implementation using only modules in Megatron-Core.
 
@@ -407,8 +414,13 @@ def get_gpt_layer_local_submodules(
         )
 
     mlp = get_mlp_module_spec_for_backend(
-        backend=backend, num_experts=num_experts, moe_grouped_gemm=moe_grouped_gemm
+        backend=backend,
+        num_experts=num_experts,
+        moe_grouped_gemm=moe_grouped_gemm,
+        use_cola=use_cola,
     )
+    linear_qkv = CoLAQKVLinear if use_cola else backend.column_parallel_linear()
+    linear_proj = CoLAAttentionOutputLinear if use_cola else backend.row_parallel_linear()
 
     if multi_latent_attention:
         assert qk_l2_norm is False, "qk_l2_norm is not supported with MLA."
@@ -441,9 +453,9 @@ def get_gpt_layer_local_submodules(
                 module=SelfAttention,
                 params={"attn_mask_type": AttnMaskType.causal},
                 submodules=SelfAttentionSubmodules(
-                    linear_qkv=backend.column_parallel_linear(),
+                    linear_qkv=linear_qkv,
                     core_attention=backend.core_attention(),
-                    linear_proj=backend.row_parallel_linear(),
+                    linear_proj=linear_proj,
                     q_layernorm=(
                         L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
                     ),
@@ -525,10 +537,14 @@ def get_mlp_module_spec_for_backend(
     use_te_op_fuser: Optional[bool] = False,
     use_te_activation_func: bool = False,
     use_grouped_gemm_for_dense_mlp: bool = False,
+    use_cola: bool = False,
 ) -> MlpBuilder:
     """Helper function to get module spec for MLP/MoE"""
 
-    linear_fc2 = backend.row_parallel_linear()
+    if use_cola and num_experts is not None:
+        raise NotImplementedError("Initial CoLA support does not cover MoE experts.")
+
+    linear_fc2 = CoLARowThenColumnLinear if use_cola else backend.row_parallel_linear()
     activation_func = backend.activation_func() if use_te_activation_func else None
 
     if num_experts is None:
@@ -540,10 +556,12 @@ def get_mlp_module_spec_for_backend(
         else:
             module = MLP.as_mlp_submodule
         if backend.fuse_layernorm_and_linear():
+            if use_cola:
+                raise NotImplementedError("Initial CoLA support does not cover fused norm+linear.")
             linear_fc1 = backend.column_parallel_layer_norm_linear()
             assert linear_fc1 is not None
         else:
-            linear_fc1 = backend.column_parallel_linear()
+            linear_fc1 = CoLAFC1Linear if use_cola else backend.column_parallel_linear()
         return partial(
             module,
             submodules=MLPSubmodules(
