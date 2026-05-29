@@ -66,3 +66,39 @@ Tiny 3B-width/4-layer smoke results root:
 `/eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172660.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`
 
 Both FullRank and CoLA smoke rows completed before the full 3B run was launched.
+
+## Optimizer-Owned DeepSpeed ZeRO-3 Results
+
+The initial ZeRO-3 run with default ATC gradient accumulation fusion failed for
+all four rows before iteration metrics. The root cause in each row was
+`CUBLAS_STATUS_INVALID_VALUE` from
+`fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp16` during DeepSpeed-owned
+backward.
+
+Default-fusion failure root:
+`/eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172884.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`
+
+After adding `NO_GRADIENT_ACCUMULATION_FUSION=1`, passing
+`--no-gradient-accumulation-fusion`, and avoiding incompatible ATC
+`main_grad` copying for ZeRO-3 sharded gradients, all four ZeRO-3 rows completed.
+
+3B ZeRO-3 results root:
+`/eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172886.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`
+
+| row | status | iter ms | fwd-bwd | grad sync | opt total | allocated | max allocated | reserved |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| FullRank DeepSpeed optimizer-owned ZeRO-3 | ok | 448.57 | 386.17 | 0.02 | 56.73 | 13163.36 | 20088.47 | 25276.00 |
+| CoLA DeepSpeed optimizer-owned ZeRO-3 | ok | 908.51 | 865.47 | 0.02 | 35.15 | 6295.47 | 13752.54 | 15526.00 |
+| FullRank DeepSpeed optimizer-owned ZeRO-3 + optimizer offload | ok | 2250.43 | 741.12 | 0.02 | 1502.52 | 2551.98 | 9720.56 | 11714.00 |
+| CoLA DeepSpeed optimizer-owned ZeRO-3 + optimizer offload | ok | 1691.98 | 1034.51 | 0.02 | 643.18 | 1693.98 | 9152.72 | 10480.00 |
+
+Notes:
+
+- ZeRO-3 no-offload is faster for FullRank than CoLA in this wrapper path:
+  CoLA is 2.03x slower, although it uses 31.5% less peak memory.
+- ZeRO-3 optimizer offload flips the throughput relationship: CoLA is 24.8%
+  faster than FullRank and uses 5.8% less peak memory, but both are much slower
+  than no-offload.
+- Compared with ZeRO-2 optimizer offload, ZeRO-3 optimizer offload uses less
+  memory but is slower: FullRank is 25.9% slower with 46.7% lower peak memory;
+  CoLA is 63.4% slower with 22.6% lower peak memory.

@@ -293,3 +293,63 @@
   - 3B FullRank DP4 baseline remains failed/OOM before metrics; rerun log shows `torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 212.00 MiB`.
   - Nsight CoLA distributed optimizer + CUDA graph generated `.nsys-rep`/`.sqlite` but failed with rank-0 SIGSEGV after profiler capture start; SQLite has no CUDA event tables, so it is recorded as failed/profile artifact empty.
 - Next step: None for this requested analysis pass unless CUDA-graph profiling needs a different capture strategy.
+
+## 2026-05-27T02:15:00Z
+
+- What changed: Consolidated the current ATC-Megatron, old Megatron-DeepSpeed, and ATC-Megatron-DeepSpeed wrapper evidence into a framework comparison report.
+- Commands run:
+  - `git -C /home/zhengyangwang/offloading/ATC-Megatron status --short`
+  - `rg --files -g '*report*' -g '*progress*' -g '*benchmark*' -g '*perf*' -g '*.md'`
+  - `find /home/zhengyangwang/offloading -maxdepth 3 -type d -iname '*deepspeed*' -o -iname '*Megatron*'`
+  - `sed -n '1,220p' skills/run-on-slurm/SKILL.md`
+  - `sed -n '1,300p' benchmark_report.md`
+  - `sed -n '1,260p' benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/REPORT.md`
+  - `sed -n '1,260p' benchmarks/0526/offload_overlap_optimization_20260526T072656Z/REPORT.md`
+  - `sed -n '1,220p' benchmarks/0525/throughput_optimization_20260526T053247Z/REPORT.md`
+  - `sed -n '1,220p' /home/zhengyangwang/offloading/Megatron-DeepSpeed/.logging/0506/day_summary.md`
+  - `sed -n '1,260p' /home/zhengyangwang/offloading/Megatron-DeepSpeed/.logging/0508/day_summary.md`
+  - `sed -n '1,180p' /home/zhengyangwang/offloading/Megatron-DeepSpeed/.logging/0507/3b_backward_autograd_compare.md`
+  - `sed -n '1,180p' /home/zhengyangwang/offloading/Megatron-DeepSpeed/.logging/0507/1b_backward_autograd_compare.md`
+  - `sed -n '1,220p' /home/zhengyangwang/offloading/Megatron-DeepSpeed/.logging/0516/7b_tp4_dp2_zero1_summary.md`
+  - `sed -n '1,220p' /home/zhengyangwang/offloading/Megatron-DeepSpeed/.logging/0523/progress_summary.md`
+  - `sed -n '1,280p' benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/run_deepspeed_wrapper_polaris.pbs`
+  - `cat /eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172661.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov/parsed/deepspeed_wrapper_table.csv`
+  - `cat /eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172605.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov/parsed/deepspeed_wrapper_table.csv`
+  - `qstat -u zhengyangwang`
+  - `bash -n benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/run_deepspeed_wrapper_polaris.pbs`
+  - Python log parsing for old Megatron-DeepSpeed 3B warm-iteration averages and memory.
+  - Python arithmetic check for the comparison ratios recorded in `framework_comparison_report.md`.
+- Result/status:
+  - Added `framework_comparison_report.md`.
+  - Current primary 3B DP4 non-graph comparison:
+    - ATC-Megatron distributed optimizer: FullRank 277.74 ms / 31.48 GiB, CoLA 202.55 ms / 17.02 GiB.
+    - Old Megatron-DeepSpeed ZeRO-1: FullRank 317.13 ms / 23.44 GiB, CoLA 546.20 ms / 13.01 GiB.
+    - ATC-Megatron-DeepSpeed optimizer-owned DeepSpeed ZeRO-2 CPU offload: FullRank 1787.31 ms / 17.82 GiB, CoLA 1035.65 ms / 11.55 GiB.
+  - The new report explicitly avoids overclaiming DeepSpeed-owned ZeRO-3/FSDP coverage. The completed ATC-Megatron-DeepSpeed optimizer-owned full-3B rows are ZeRO-2 optimizer CPU offload only.
+  - PBS is currently unreachable from this shell: `qstat` failed with `Unknown Host` for `polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov`, so new ZeRO-3/FSDP jobs were not submitted in this pass.
+- Next step: When PBS is reachable, submit ATC-Megatron-DeepSpeed optimizer-owned DeepSpeed ZeRO-3 rows for FullRank and CoLA, then update the comparison report with true ZeRO-3/FSDP numbers.
+
+## 2026-05-27T08:05:00Z
+
+- What changed: Submitted and completed ATC-Megatron-DeepSpeed optimizer-owned DeepSpeed ZeRO-3 rows, fixed the wrapper issues needed to collect valid ZeRO-3 timing, and updated the comparison reports.
+- Commands run:
+  - `qstat -u zhengyangwang` with scheduler access; confirmed PBS was reachable under escalated scheduler access.
+  - `qsub -v DEEPSPEED_WRAPPER_MODE=optimizer,DEEPSPEED_ZERO_STAGE=3,RUN_NOGRAPH=1,RUN_CUDAGRAPH=0,RUN_TIMEOUT_SECONDS=1200,MODEL_SIZE=3b benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/run_deepspeed_wrapper_polaris.pbs`
+  - `tail` and `rg` over `/eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172884.../logs/*.log`
+  - Reparsed job `7172884` with `parse_deepspeed_wrapper_results.py`
+  - `qsub -v DEEPSPEED_WRAPPER_MODE=optimizer,DEEPSPEED_ZERO_STAGE=3,RUN_NOGRAPH=1,RUN_CUDAGRAPH=0,RUN_TIMEOUT_SECONDS=1200,MODEL_SIZE=3b,NO_GRADIENT_ACCUMULATION_FUSION=1 benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/run_deepspeed_wrapper_polaris.pbs`
+  - `qsub -v DEEPSPEED_WRAPPER_MODE=optimizer,DEEPSPEED_ZERO_STAGE=3,RUN_NOGRAPH=1,RUN_CUDAGRAPH=0,RUN_TIMEOUT_SECONDS=1200,MODEL_SIZE=3b,NO_GRADIENT_ACCUMULATION_FUSION=1 benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/run_deepspeed_wrapper_polaris.pbs`
+  - `cat /eagle/TensorCompress/zhengyangwang/atc_deepspeed_wrapper/7172886.polaris-pbs-01.hsn.cm.polaris.alcf.anl.gov/parsed/deepspeed_wrapper_table.csv`
+  - `/home/zhengyangwang/.conda/envs/dspeed_env/bin/python -m py_compile pretrain_gpt_deepspeed.py benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/parse_deepspeed_wrapper_results.py`
+  - `bash -n benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/run_deepspeed_wrapper_polaris.pbs`
+  - `git diff --check`
+- Result/status:
+  - Job `7172884` showed default ZeRO-3 with ATC gradient accumulation fusion fails in all four rows with `CUBLAS_STATUS_INVALID_VALUE` from `fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp16`.
+  - Added `NO_GRADIENT_ACCUMULATION_FUSION=1` support to the DeepSpeed wrapper PBS harness.
+  - Updated the parser to prefer the root CUDA/CUBLAS error over the final `ChildFailedError`.
+  - Patched `pretrain_gpt_deepspeed.py` so DeepSpeed optimizer-owned mode only installs ATC `main_grad` buffers for the gradient-fusion path and only copies `main_grad` into `param.grad` when shapes match. This fixed ZeRO-3 sharded-gradient compatibility when gradient fusion is disabled.
+  - Job `7172886` completed all four 3B ZeRO-3 rows with `NO_GRADIENT_ACCUMULATION_FUSION=1`.
+  - ZeRO-3 no-offload: FullRank 448.57 ms / 19.62 GiB, CoLA 908.51 ms / 13.43 GiB.
+  - ZeRO-3 optimizer CPU offload: FullRank 2250.43 ms / 9.49 GiB, CoLA 1691.98 ms / 8.94 GiB.
+  - Updated `framework_comparison_report.md` and `benchmarks/0526/deepspeed_wrapper_bench_20260526T234901Z/REPORT.md` with the ZeRO-3 results and caveats.
+- Next step: Audit whether the objective is now complete except for a possible separate DeepSpeed FSDP implementation path; if such a path exists locally, add it, otherwise explicitly record that DeepSpeed ZeRO-3 is the measured full-sharding implementation for this wrapper.

@@ -164,7 +164,7 @@ class _DeepSpeedOptimizerAdapter:
     def step(self, *args, **kwargs):
         for param in self.engine.module.parameters():
             main_grad = getattr(param, "main_grad", None)
-            if main_grad is not None:
+            if main_grad is not None and tuple(main_grad.shape) == tuple(param.shape):
                 param.grad = main_grad
         self.engine.step(*args, **kwargs)
         update_successful = bool(getattr(self.engine, "_step_applied", True))
@@ -387,7 +387,7 @@ def _install_deepspeed_setup_wrapper():
             dist_init_required=False,
             config=ds_config,
         )
-        if owns_optimizer:
+        if owns_optimizer and megatron_args.gradient_accumulation_fusion:
             _install_main_grad_buffers_for_deepspeed(model[0])
         _configure_deepspeed_ownership(model[0], engine, owns_optimizer)
         model = [_DeepSpeedModelAdapter(engine, owns_optimizer=owns_optimizer)]

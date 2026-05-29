@@ -165,6 +165,9 @@ run_row() {
 
   local deepspeed_args=(--deepspeed --deepspeed-wrapper-mode "$DEEPSPEED_WRAPPER_MODE")
   local runtime_args=()
+  if [ "${NO_GRADIENT_ACCUMULATION_FUSION:-0}" = "1" ]; then
+    runtime_args+=(--no-gradient-accumulation-fusion)
+  fi
   if [ "$DEEPSPEED_WRAPPER_MODE" = "optimizer" ]; then
     write_ds_config "$ds_config" "$offload"
     deepspeed_args+=(--deepspeed_config "$ds_config")
@@ -267,6 +270,7 @@ run_row() {
   "warmup_iters": "$WARMUP_ITERS",
   "gpus_per_node": "$GPUS_PER_NODE",
   "nnodes": "$NNODES",
+  "no_gradient_accumulation_fusion": "${NO_GRADIENT_ACCUMULATION_FUSION:-0}",
   "hidden_size": "$HIDDEN_SIZE",
   "ffn_hidden_size": "$FFN_HIDDEN_SIZE",
   "num_layers": "$NUM_LAYERS",

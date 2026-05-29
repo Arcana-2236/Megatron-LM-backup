@@ -66,6 +66,12 @@ def extract_failure_reason(text):
     if "RUN_TIMEOUT" in text:
         return "RUN_TIMEOUT"
     for line in reversed(text.splitlines()):
+        if "CUBLAS_STATUS_INVALID_VALUE" in line:
+            return line.strip()
+    for line in reversed(text.splitlines()):
+        if "CUDA error:" in line:
+            return line.strip()
+    for line in reversed(text.splitlines()):
         if "torch.OutOfMemoryError:" in line or "CUDA out of memory" in line:
             return line.strip()
     for line in reversed(text.splitlines()):
@@ -79,7 +85,6 @@ def extract_failure_reason(text):
                 "AssertionError:",
                 "ValueError:",
                 "NotImplementedError:",
-                "CUDA error:",
                 "ChildFailedError:",
             )
         ):
