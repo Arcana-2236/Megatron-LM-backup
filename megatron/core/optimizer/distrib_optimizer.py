@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional
 
-from megatron.core.utils import log_single_rank
+from megatron.core.utils import log_single_rank, to_local_if_dtensor
 
 from ..dist_checkpointing.optimizer import KEEP_VARS_HINT
 
@@ -2537,11 +2537,14 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         but written differently, so the two should be combined.
         """
         if self.config.use_precision_aware_optimizer_no_fp8_or_ds_fp8:
-            return [
-                param.decoupled_grad.data
-                for group in self.optimizer.param_groups
-                for param in group["params"]
-            ]
+            main_grads = []
+            for group in self.optimizer.param_groups:
+                for param in group["params"]:
+                    grad = getattr(param, "decoupled_grad", None)
+                    if grad is None:
+                        continue
+                    main_grads.append(to_local_if_dtensor(grad).data)
+            return main_grads
         else:
             return [
                 param.grad.data
