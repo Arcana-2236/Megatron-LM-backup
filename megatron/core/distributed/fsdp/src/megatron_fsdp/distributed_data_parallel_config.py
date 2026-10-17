@@ -87,6 +87,12 @@ class DistributedDataParallelConfig:
       | IB                   | True      | 1 / 1               |
     """
 
+    fsdp_reverse_backward_ag: bool = False
+    """Launch backward all-gather groups in descending storage-buffer order.
+
+    Preserve buffer order within each group and leave forward gathers unchanged.
+    """
+
     fsdp_double_buffer: bool = False
     """If true, use persistently allocated double buffers for the 
       temporary memory needed in the Megatron FSDP communications.

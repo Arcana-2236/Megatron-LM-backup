@@ -4884,8 +4884,13 @@ class AllGatherPipeline:
         # because the all-gather parameter groups may be a subset of the buckets.
         bucket_group_to_buckets = self._group_buckets(ag_buckets)
 
+        bucket_groups = list(bucket_group_to_buckets.values())
+        if bwd and self.buffer.ddp_config.fsdp_reverse_backward_ag:
+            # Reverse group launch priority, preserving collective order within each group.
+            bucket_groups.reverse()
+
         # Coalesce all-gather operations for all buckets in the same data-parallel-group
-        for _, buckets in bucket_group_to_buckets.items():
+        for buckets in bucket_groups:
             all_gather_stream = (
                 self.ag_stream if self.ag_stream is not None else torch.cuda.current_stream()
             )

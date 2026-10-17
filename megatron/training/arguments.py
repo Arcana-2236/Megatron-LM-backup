@@ -1077,6 +1077,11 @@ def validate_args(args, defaults={}):
     ):
         raise ValueError("MXFP8 with inference optimized layers requires FlashInfer >= 0.6.4")
 
+    if args.fsdp_reverse_backward_ag:
+        assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, (
+            "--fsdp-reverse-backward-ag requires Megatron-FSDP v1"
+        )
+
     if args.fsdp_prefetch_before_zero_grad:
         assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, \
             "--fsdp-prefetch-before-zero-grad requires Megatron-FSDP v1"
@@ -3235,6 +3240,9 @@ def _add_distributed_args(parser):
                             'Only effective with --outer-dp-sharding-strategy=optim.')
     group.add_argument('--no-gradient-reduce-div-fusion', action='store_false', dest='gradient_reduce_div_fusion',
                        help='If not set, fuse the division in gradient reduce.')
+    group.add_argument("--fsdp-reverse-backward-ag", action="store_true",
+                       help="Launch backward FSDP v1 AG groups in descending buffer order; "
+                            "preserve buffer order within groups and forward behavior.")
     group.add_argument("--fsdp-prefetch-before-zero-grad", action="store_true",
                        help="Launch startup FSDP AG in the next training step before gradient "
                             "zeroing, after the preceding iteration reporting. Requires v1, "
