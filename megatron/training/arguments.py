@@ -1077,6 +1077,14 @@ def validate_args(args, defaults={}):
     ):
         raise ValueError("MXFP8 with inference optimized layers requires FlashInfer >= 0.6.4")
 
+    if args.fsdp_prefetch_before_zero_grad:
+        assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, \
+            "--fsdp-prefetch-before-zero-grad requires Megatron-FSDP v1"
+        assert args.overlap_param_gather and args.pipeline_model_parallel_size == 1, \
+            "--fsdp-prefetch-before-zero-grad requires gather overlap and PP=1"
+        assert args.cuda_graph_impl == "none", \
+            "--fsdp-prefetch-before-zero-grad does not support CUDA graphs"
+
     if args.use_megatron_fsdp:
         # NOTE: The flag `use_custom_fsdp` is deprecated and will be removed in future versions.
         #       Please use `use_megatron_fsdp` instead, as all functionality will be migrated there.
@@ -3227,6 +3235,10 @@ def _add_distributed_args(parser):
                             'Only effective with --outer-dp-sharding-strategy=optim.')
     group.add_argument('--no-gradient-reduce-div-fusion', action='store_false', dest='gradient_reduce_div_fusion',
                        help='If not set, fuse the division in gradient reduce.')
+    group.add_argument("--fsdp-prefetch-before-zero-grad", action="store_true",
+                       help="Launch startup FSDP AG in the next training step before gradient "
+                            "zeroing, after the preceding iteration reporting. Requires v1, "
+                            "PP=1, gather overlap and no CUDA graphs.")
     group.add_argument('--fsdp-double-buffer', action='store_true',
                        help="Enable double buffering for temporary memory needed for Megatron FSDP communications. "
                         "Double-buffering the communication memory improves memory management efficiency by "

@@ -3329,6 +3329,11 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
     save_dgrads_in_this_iteration = (args.save_dgrads_interval is not None and
                                      (iteration + 1) % args.save_dgrads_interval == 0)
     while rerun_state_machine.should_run_forward_backward(data_iterator):
+        if args.fsdp_prefetch_before_zero_grad:
+            # Reporting/timing for the previous step has finished. Gather asynchronously
+            # so gradient zeroing and early forward can overlap startup communication.
+            for model_chunk in model:
+                model_chunk.start_param_sync()
         # Set grad to zero.
         for model_chunk in model:
             model_chunk.zero_grad_buffer()

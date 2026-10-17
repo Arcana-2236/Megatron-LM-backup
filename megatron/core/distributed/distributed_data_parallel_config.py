@@ -166,6 +166,13 @@ class DistributedDataParallelConfig:
        usually leads to low performance.
     """
 
+    fsdp_prefetch_before_zero_grad: bool = False
+    """Defer startup parameter gathers from the optimizer to the next training step.
+
+    The training loop must call start_param_sync() before zeroing gradients.
+    Supported for Megatron-FSDP v1 with PP=1, gather overlap and no CUDA graphs.
+    """
+
     fsdp_all_gather_in_start_param_sync: bool = True
     """
     If True, use all-gather during the initial Megatron-FSDP parameter

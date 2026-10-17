@@ -3369,14 +3369,19 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
         should_sync_params = not self.ddp_config.overlap_param_gather and not getattr(
             self, '_defer_param_sync', False
         )
+        sync_fsdp_params = (
+            self.ddp_config.use_megatron_fsdp
+            and not self.ddp_config.fsdp_prefetch_before_zero_grad
+        )
         timers = self.config.timers
-        if timers is not None and (self.ddp_config.use_megatron_fsdp or should_sync_params):
+        if timers is not None and (sync_fsdp_params or should_sync_params):
             timers('params-all-gather', log_level=1).start(barrier=self.config.barrier_with_L1_time)
         if self.ddp_config.use_megatron_fsdp:
             # Optionally all-gather Megatron-FSDP sharded main weights
             # early in preparation for the subsequent forward pass.
-            for model_chunk in self.model_chunks:
-                model_chunk.start_param_sync()
+            if sync_fsdp_params:
+                for model_chunk in self.model_chunks:
+                    model_chunk.start_param_sync()
         else:
             # If not overlapping all-gather for parameters, launch synchronous all-gather
             # communication calls here. If overlapping all-gather for parameters, the following
@@ -3387,7 +3392,7 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                 # LayerWiseDistributedOptimizer's own ``start_param_sync`` call
                 # is not duplicated for the same buckets.
                 self.start_param_sync_for_bucket_group_subset()
-        if timers is not None and (self.ddp_config.use_megatron_fsdp or should_sync_params):
+        if timers is not None and (sync_fsdp_params or should_sync_params):
             timers('params-all-gather').stop()
 
         return update_successful
