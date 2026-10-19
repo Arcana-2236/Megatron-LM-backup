@@ -1088,6 +1088,12 @@ def validate_args(args, defaults={}):
             "Early backward prefetch is tested without CUDA graphs or recomputation"
         )
 
+    if args.fsdp_rs_queue_capacity is not None:
+        assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, (
+            "--fsdp-rs-queue-capacity requires Megatron-FSDP v1"
+        )
+        assert args.fsdp_rs_queue_capacity > 0, "RS queue capacity must be positive"
+
     if args.fsdp_reverse_backward_ag:
         assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, (
             "--fsdp-reverse-backward-ag requires Megatron-FSDP v1"
@@ -3254,6 +3260,9 @@ def _add_distributed_args(parser):
     group.add_argument("--fsdp-prefetch-last-unit-backward", action="store_true",
                        help="Prefetch the last decoder FSDP unit before output-layer backward, "
                             "without extra prefetch. Experimental sequential-decoder path.")
+    group.add_argument("--fsdp-rs-queue-capacity", type=int, default=None,
+                       help="Override FSDP v1's soft RS queue limit in elements, "
+                            "without changing AG prefetch.")
     group.add_argument("--fsdp-reverse-backward-ag", action="store_true",
                        help="Launch backward FSDP v1 AG groups in descending buffer order; "
                             "preserve buffer order within groups and forward behavior.")

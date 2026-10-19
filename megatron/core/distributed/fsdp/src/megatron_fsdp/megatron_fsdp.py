@@ -483,7 +483,11 @@ class MegatronFSDP(torch.nn.Module):
                 1_000_000_000, suggested_communication_unit_size
             )
 
-        self.suggested_RS_queue_capacity = suggested_communication_unit_size
+        rs_capacity = self.ddp_config.fsdp_rs_queue_capacity
+        assert rs_capacity is None or rs_capacity > 0, "RS queue capacity must be positive"
+        self.suggested_RS_queue_capacity = (
+            suggested_communication_unit_size if rs_capacity is None else rs_capacity
+        )
         self.suggested_AG_prefetch_size = suggested_communication_unit_size // 2
 
         # Only optim_grads_params shards model weights, so only those parameters are

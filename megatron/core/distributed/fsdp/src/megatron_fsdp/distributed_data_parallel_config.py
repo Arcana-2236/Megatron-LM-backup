@@ -59,6 +59,9 @@ class DistributedDataParallelConfig:
     gradient_reduce_div_fusion: bool = True
     """If true, perform gradient reduce and division fusion."""
 
+    fsdp_rs_queue_capacity: int = None
+    """Override the soft RS queue limit in elements; leave AG prefetch unchanged."""
+
     suggested_communication_unit_size: int = None
     """Specifies the number of elements to communicate at once during
       FSDP (Fully Sharded Data Parallel) operations. 
