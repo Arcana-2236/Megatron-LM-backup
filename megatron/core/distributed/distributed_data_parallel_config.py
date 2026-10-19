@@ -159,6 +159,13 @@ class DistributedDataParallelConfig:
     Gather only that unit; its normal backward hook still enforces readiness.
     """
 
+    fsdp_layer_complete_prefetch: bool = False
+    """Complete each selected FSDP unit before checking the AG prefetch budget.
+
+    Keep collective groups and readiness checks unchanged. Non-unit buffers
+    retain communication-group selection; the element budget remains soft.
+    """
+
     fsdp_reverse_backward_ag: bool = False
     """Launch backward all-gather groups in descending storage-buffer order.
 

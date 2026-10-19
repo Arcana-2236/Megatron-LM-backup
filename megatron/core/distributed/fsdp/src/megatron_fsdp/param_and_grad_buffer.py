@@ -4726,7 +4726,14 @@ class AllGatherPipeline:
                 if len(double_buffer_units) > 2:
                     break
 
-            result.extend(self.buffer.bucket_to_bucket_group[bucket_id])
+            next_buckets = self.buffer.bucket_to_bucket_group[bucket_id]
+            unit_id = parameter_groups[bucket_id].fsdp_unit_id
+            if self.buffer.ddp_config.fsdp_layer_complete_prefetch and unit_id is not None:
+                # Finish the selected unit without merging its collective groups.
+                next_buckets = [
+                    i for i, group in enumerate(parameter_groups) if group.fsdp_unit_id == unit_id
+                ]
+            result.extend(next_buckets)
             result = list(sorted(set(result)))
             bucket_id = next_bucket_id()
 
