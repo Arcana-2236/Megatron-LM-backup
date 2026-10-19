@@ -1204,6 +1204,34 @@ class MegatronFSDP(torch.nn.Module):
                     )
                 )
 
+        if self.ddp_config.fsdp_prefetch_last_unit_backward:
+            model = root_module
+            # Mixed-precision wrappers own the model under .module.
+            while hasattr(model, "module"):
+                model = model.module
+            output_layer = getattr(model, "output_layer", None)
+            decoder_layers = getattr(getattr(model, "decoder", None), "layers", None)
+            assert output_layer is not None and fsdp_modules and decoder_layers is not None, (
+                "Early backward prefetch requires decoder.layers and an output_layer"
+            )
+            last_unit = fsdp_modules[-1]
+            assert decoder_layers[-1] is last_unit, "Last decoder layer must be an FSDP unit"
+
+            def prefetch_last_unit_backward(module, *unused):
+                # Initialize backward lifetime state before marking this unit in use.
+                _root_pre_backward(root_module)
+                self.all_gather_and_wait_parameters_ready(
+                    params=list(last_unit.parameters()),
+                    prefetch=False,
+                    prefetch_order=PrefetchOrder.BACKWARD_PASS_ORDER,
+                    wait_bucket_ready=False,
+                    bwd=True,
+                )
+
+            self.backward_pre_hooks["prefetch last unit before output backward"] = (
+                create_custom_backward_hook(output_layer, prefetch_last_unit_backward)
+            )
+
         # Register root module pre- and post-backward hooks in cases where the
         # forward function of root module is not called, but rather the forward
         # function of the root module from named_modules() is called instead.

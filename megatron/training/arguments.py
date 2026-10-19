@@ -1077,6 +1077,17 @@ def validate_args(args, defaults={}):
     ):
         raise ValueError("MXFP8 with inference optimized layers requires FlashInfer >= 0.6.4")
 
+    if args.fsdp_prefetch_last_unit_backward:
+        assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, (
+            "--fsdp-prefetch-last-unit-backward requires Megatron-FSDP v1"
+        )
+        assert args.pipeline_model_parallel_size == 1 and args.overlap_param_gather, (
+            "Early backward prefetch requires PP=1 and gather overlap"
+        )
+        assert args.cuda_graph_impl == "none" and args.recompute_granularity is None, (
+            "Early backward prefetch is tested without CUDA graphs or recomputation"
+        )
+
     if args.fsdp_reverse_backward_ag:
         assert args.use_megatron_fsdp and args.megatron_fsdp_version == 1, (
             "--fsdp-reverse-backward-ag requires Megatron-FSDP v1"
@@ -3240,6 +3251,9 @@ def _add_distributed_args(parser):
                             'Only effective with --outer-dp-sharding-strategy=optim.')
     group.add_argument('--no-gradient-reduce-div-fusion', action='store_false', dest='gradient_reduce_div_fusion',
                        help='If not set, fuse the division in gradient reduce.')
+    group.add_argument("--fsdp-prefetch-last-unit-backward", action="store_true",
+                       help="Prefetch the last decoder FSDP unit before output-layer backward, "
+                            "without extra prefetch. Experimental sequential-decoder path.")
     group.add_argument("--fsdp-reverse-backward-ag", action="store_true",
                        help="Launch backward FSDP v1 AG groups in descending buffer order; "
                             "preserve buffer order within groups and forward behavior.")

@@ -87,6 +87,13 @@ class DistributedDataParallelConfig:
       | IB                   | True      | 1 / 1               |
     """
 
+    fsdp_prefetch_last_unit_backward: bool = False
+    """Prefetch the last sequential decoder unit at output-layer backward entry.
+
+    Experimental: requires a decoder.layers sequence and a separate output_layer.
+    Gather only that unit; its normal backward hook still enforces readiness.
+    """
+
     fsdp_reverse_backward_ag: bool = False
     """Launch backward all-gather groups in descending storage-buffer order.
 
